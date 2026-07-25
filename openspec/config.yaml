@@ -1,0 +1,62 @@
+schema: spec-driven
+
+context: |
+  Project: notify-opencode
+  Tech stack: Not established; repository has no implementation or manifest files.
+  Architecture: Not established; future scope is a repository-only documentation manager CLI and MCP.
+  Testing: No runner, test files, coverage, linting, type-checking, or formatter detected.
+  Style: No project conventions detected; technical artifacts are written in English.
+  Repository state: Git repository on main with no commits, no remote, and no tracked files.
+
+strict_tdd: false
+
+testing:
+  detected: 2026-07-26
+  strict_tdd: false
+  reason: No test runner or implementation stack is present.
+  test_runner:
+    available: false
+    command: ""
+    framework: ""
+  layers:
+    unit: false
+    integration: false
+    e2e: false
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter:
+      available: false
+      command: ""
+    type_checker:
+      available: false
+      command: ""
+    formatter:
+      available: false
+      command: ""
+
+rules:
+  proposal:
+    - State scope, non-goals, risks, and rollback plan for risky changes.
+  specs:
+    - Use RFC 2119 keywords and Given/When/Then scenarios.
+    - Keep requirements implementation-independent.
+  design:
+    - Document architecture decisions and rationale.
+    - Include sequence diagrams for complex flows.
+  tasks:
+    - Group tasks by phase with hierarchical numbering.
+    - Keep each task completable in one session.
+  apply:
+    guidelines:
+      - Establish project conventions before extending the codebase.
+      - Follow the approved design and task plan.
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas.
