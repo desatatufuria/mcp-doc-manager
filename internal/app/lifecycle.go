@@ -158,8 +158,14 @@ func lifecycleRoot(target string) (string, error) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return "", domain.ErrInvalidTarget
 	}
+	physicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", domain.ErrInvalidTarget
+	}
 	output, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
-	if err != nil || filepath.Clean(strings.TrimSpace(string(output))) != filepath.Clean(root) {
+	gitRoot := filepath.Clean(strings.TrimSpace(string(output)))
+	physicalGitRoot, err := filepath.EvalSymlinks(gitRoot)
+	if err != nil || filepath.Clean(physicalGitRoot) != filepath.Clean(physicalRoot) {
 		return "", domain.ErrInvalidTarget
 	}
 	return root, nil

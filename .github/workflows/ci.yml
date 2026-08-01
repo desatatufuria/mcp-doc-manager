@@ -33,10 +33,13 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: amd64
+            output: docmanager
           - os: macos-latest
             arch: arm64
+            output: docmanager
           - os: windows-latest
             arch: amd64
+            output: docmanager.exe
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
@@ -46,7 +49,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
           GOARCH: ${{ matrix.arch }}
-        run: go build -o docmanager ./cmd/docmanager
+        run: go build -o ${{ matrix.output }} ./cmd/docmanager
       - name: Smoke executable and embedded assets
         if: runner.os != 'Windows'
         run: |
