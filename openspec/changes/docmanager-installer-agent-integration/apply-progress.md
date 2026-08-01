@@ -399,3 +399,44 @@ Completed tasks: 3.1, 3.2.
 ### Aggregate Completion Status
 
 16/25 tasks complete. `tasks.md` confirms 1.1–1.4, 2.1–2.10, and 3.1–3.2 checked. Tasks 3.3–3.8 and 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 7 — Codex/Claude (tasks 3.3–3.4)
+
+Completed tasks: 3.3, 3.4.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 3.3 | `internal/adapters/agent/codex_claude_test.go` | Unit/integration | `go test ./internal/adapters/agent -run 'Codex|Claude' -count=1` — package built before the new test | Same focused command — build FAILED: `NewCodex`, `CodexOptions`, `NewClaude`, and `ClaudeOptions` undefined | Same command — exit 0; all Codex/Claude tests PASS | Configure/unconfigure, unrelated TOML/OAuth preservation, idempotence, 0600, malformed/conflict/drift/symlink/lock/route/probe no-write cases | Extracted adapter-local routes and marker checks; focused tests remained PASS |
+| 3.4 | `internal/adapters/agent/{codex,claude}.go` | Unit/integration | RED suite from 3.3 preceded production code | 3.3 referenced every adapter constructor before implementation | `go test ./internal/adapters/agent -count=1` — exit 0; package PASS | Codex TOML versus Claude JSON/config-mode routes exercise distinct parsing and mutation paths | `gofmt -w internal/adapters/agent`; focused/package/full-suite checks remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/adapters/agent -run 'Codex|Claude' -count=1` — exit 0; Codex and Claude focused tests PASS. |
+| Package and regression commands | `go test ./internal/adapters/agent -count=1` — exit 0; package PASS. `go test ./...` — exit 0; all tested packages PASS; `assets` has no test files. |
+| Runtime harness command/scenario and exact result | `go test -v ./internal/adapters/agent -run 'Test(CodexConfigureStatusAndUnconfigure|ClaudeConfigureStatusAndUnconfigurePreservesModeAndOAuth)$' -count=1` — exit 0; isolated `t.TempDir()` HOME roots configured, reported status, unconfigured, preserved unrelated TOML/OAuth content, and verified Claude mode `0600`. |
+| Formatting and diff checks | `gofmt -w internal/adapters/agent`; `test -z "$(gofmt -l cmd internal spike)"`; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/agent/{codex,claude}.go`, `codex_claude_test.go`, `testdata/agent/{codex,claude}/`, and the 3.3–3.4 task/progress entries. OpenCode core, Copilot, Pi, app/CLI orchestration, acceptance, MCP, receipt, and ledger behavior remain outside this boundary. |
+| Cleanup/process evidence | Tests use only `t.TempDir()` HOME roots and injected runners. No real HOME/config is read or written; no shell/background process occurs; lock files and temporary atomic-write files are removed by deferred cleanup. |
+
+### Work Unit 7 Apply Result Contract
+
+- status: success
+- executive_summary: Added fixture-pinned Codex TOML and Claude sensitive JSON adapters with owned MCP/guidance lifecycles, independent status dimensions, absolute argv-only bounded probes, locks, atomic writes, drift/conflict/malformed/symlink/route refusal, and Claude `0600` enforcement.
+- artifacts: `internal/adapters/agent/{codex,claude}.go`; `internal/adapters/agent/codex_claude_test.go`; `testdata/agent/{codex,claude}/`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`; Engram topic `sdd/docmanager-installer-agent-integration/apply-progress` remains preserved from Work Unit 6.
+- next_recommended: sdd-apply for explicitly assigned tasks 3.5–3.6 only.
+- risks: TOML support deliberately changes only the owned `[mcp_servers.docmanager]` block and preserves unrelated source bytes/tables; no generic TOML rewrite, no actual user config, and no app/CLI wiring was introduced.
+- skill_resolution: paths-injected — sdd-apply, work-unit-commits, go-testing, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 7 based on tracker after Work Unit 6; no commit, push, merge, PR, Copilot, Pi, app/CLI orchestration, acceptance, or CI-regression action.
+- native_token: retained by parent.
+- changed_line_evidence: 568 product/test/fixture lines + 43 OpenSpec task/progress evidence lines = 611 total; `611 < 800` native work-unit budget.
+- native_settlement_result: complete
+- evidence_revision: `sha256:cfb3bf997c7f1ad686de667c090cbdc24cd854d89f45e8e10262c4c4ec934ce1` — SHA-256 of the ordered per-file SHA-256 manifest for Work Unit 7 code, tests, fixtures, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+18/25 tasks complete. `tasks.md` confirms 1.1–1.4, 2.1–2.10, and 3.1–3.4 checked. Tasks 3.5–3.8 and 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
