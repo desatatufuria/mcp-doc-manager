@@ -1,0 +1,40 @@
+name: Go MCP SQLite Compatibility Spike
+
+on:
+  pull_request:
+    paths:
+      - "spike/go-mcp-sqlite/**"
+      - ".github/workflows/spike.yml"
+  push:
+    paths:
+      - "spike/go-mcp-sqlite/**"
+      - ".github/workflows/spike.yml"
+
+jobs:
+  compatibility:
+    name: ${{ matrix.os }} compatibility
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: spike/go-mcp-sqlite
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+      - name: Test MCP stdio and SQLite persistence
+        run: go test ./...
+      - name: Build native package without CGo
+        env:
+          CGO_ENABLED: "0"
+        run: go build -o go-mcp-sqlite-spike .
+      - name: Run native package smoke
+        if: runner.os != 'Windows'
+        run: ./go-mcp-sqlite-spike --package-smoke
+      - name: Run native package smoke
+        if: runner.os == 'Windows'
+        run: .\go-mcp-sqlite-spike.exe --package-smoke
