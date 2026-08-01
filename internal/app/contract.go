@@ -59,6 +59,7 @@ type WorkspaceStatus struct {
 
 type Status struct {
 	Agent     *AgentStatus     `json:"agent,omitempty"`
+	Agents    []AgentStatus    `json:"agents,omitempty"`
 	Release   *ReleaseStatus   `json:"release,omitempty"`
 	Workspace *WorkspaceStatus `json:"workspace,omitempty"`
 }
