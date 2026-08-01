@@ -1,0 +1,1 @@
+{"command":["docmanager","hook-verify"],"input":"pre-push-ref-updates","mode":"warn","schema":"docmanager/hook/v1"}
