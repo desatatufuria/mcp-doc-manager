@@ -358,3 +358,44 @@ Completed tasks: 2.9, 2.10.
 ### Aggregate Completion Status
 
 14/21 tasks complete. `tasks.md` confirms tasks 1.1–1.4 and 2.1–2.10 checked. Agent tasks 3.1–3.4 and acceptance/documentation tasks 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 6 — Agent core/OpenCode (tasks 3.1–3.2)
+
+Completed tasks: 3.1, 3.2.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 3.1 | `internal/adapters/agent/core_opencode_test.go` | Unit/integration | N/A (new package) | `go test ./internal/adapters/agent -run OpenCode -count=1` — build failed: `NewOpenCode`, options, and safe-boundary errors undefined | Same command — exit 0; all OpenCode tests PASS | JSON and JSONC routes; installed/supported/configured/healthy states; malformed, unknown, ownership, drift, symlink, route, lock, literal, timeout, and failed-probe branches | Extracted route, merge, registry, and adapter boundaries; focused tests remained PASS |
+| 3.2 | `internal/adapters/agent/{registry,route,merge,opencode}.go` | Unit/integration | RED suite from 3.1 preceded production code | 3.1 covered every new adapter boundary before production files existed | `go test ./internal/adapters/agent -count=1` — exit 0; package PASS | Idempotent configure/unconfigure and unrelated JSON/JSONC preservation exercise independent mutation paths | `gofmt -w internal/adapters/agent`; focused/package/full-suite checks remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/adapters/agent -run OpenCode -count=1` — exit 0; OpenCode focused tests PASS. |
+| Package and regression commands | `go test ./internal/adapters/agent -count=1` — exit 0; package PASS. `go test ./...` — exit 0; all tested packages PASS; `assets` has no test files. |
+| Runtime harness command/scenario and exact result | `go test -v ./internal/adapters/agent -run 'TestOpenCodeConfigure(StatusAndUnconfigureJSONC|AndUnconfigureJSON)$' -count=1` — exit 0; isolated `t.TempDir()` XDG JSONC and JSON roots configured, reported status, unconfigured, preserved unrelated content/comments, and removed only managed MCP/guidance. |
+| Formatting and diff checks | `gofmt -w internal/adapters/agent`; `test -z "$(gofmt -l cmd internal spike)"`; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/agent/{registry,route,merge,opencode}.go`, `core_opencode_test.go`, `testdata/agent/opencode/`, and the 3.1–3.2 task/progress entries. Codex, Claude, Copilot, Pi, app/CLI orchestration, acceptance, MCP, receipt, ledger, and CI regression work remain outside this boundary. |
+| Cleanup/process evidence | All tests use `t.TempDir()` and injected discovery/runner functions; no real HOME, XDG configuration, user config, shell, background process, or external subprocess is touched. Lock files are released by deferred cleanup and atomic temporary files are deferred for removal. |
+
+### Work Unit 6 Apply Result Contract
+
+- status: success
+- executive_summary: Added fixture-pinned OpenCode discovery, route validation, ownership-aware JSON/JSONC managed MCP/guidance mutation, locking, atomic writes, and bounded argv-only health probes. Detection is read-only and reports installed, supported, configured, and healthy independently.
+- artifacts: `internal/adapters/agent/{registry,route,merge,opencode}.go`; `internal/adapters/agent/core_opencode_test.go`; `testdata/agent/opencode/{registry-v1,valid}.{json,jsonc}`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`; Engram topic `sdd/docmanager-installer-agent-integration/apply-progress`.
+- next_recommended: sdd-apply for explicitly assigned tasks 3.3–3.4 only.
+- risks: The OpenCode reference adapter is not wired into app/CLI orchestration; Codex, Claude, Copilot, Pi, and acceptance/CI regressions remain pending by design.
+- skill_resolution: paths-injected — sdd-apply, work-unit-commits, go-testing, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 6 on `feature/docmanager-installer-agent-core`, based on tracker after packaging; no commit, push, merge, PR, Codex, Claude, Copilot, Pi, app/CLI orchestration, acceptance, or CI-regression action.
+- native_token: retained by parent.
+- native_settlement_result: complete
+- changed_line_evidence: 564 product/test/fixture lines + 42 task/progress evidence lines = 606 total; `606 < 800` native work-unit budget.
+- evidence_revision: `sha256:37b153941536ecfe9d7f6c7c2beaa25259b3f78f128b23f253e1433d63631fad` — SHA-256 of the ordered per-file SHA-256 manifest for Work Unit 6 agent code, tests, fixtures, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+16/25 tasks complete. `tasks.md` confirms 1.1–1.4, 2.1–2.10, and 3.1–3.2 checked. Tasks 3.3–3.8 and 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.

@@ -7,7 +7,7 @@
 | Estimated changed lines | 2,400–3,300 authored; fixtures/assets excluded |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
-| Suggested split | Contract → workspace → trust → lifecycle → packaging → agents → acceptance; tracker last |
+| Suggested split | Contract → workspace → trust → lifecycle → packaging → agent core → Codex/Claude → Copilot/Pi → orchestration → acceptance; tracker last |
 | Delivery strategy | ask-on-risk |
 | Chain strategy | feature-branch-chain |
 
@@ -25,8 +25,11 @@ Chain strategy: feature-branch-chain
 | 3 | Release trust ≤800 | `feature/docmanager-installer-release`, tracker after U2 | `go test ./internal/adapters/release -run 'Trust|Extract'` | `httptest` manifest/archive | trust/download/extraction only |
 | 4 | Release lifecycle ≤800 | tracker after U3 | `go test ./internal/adapters/release ./internal/app -run 'Lifecycle|Probe'` | temp owned binary upgrade/rollback | lifecycle/probe only |
 | 5 | Release packaging ≤800 | tracker after U4 | `go test ./internal/adapters/release -run Bootstrap` | archive/bootstrap fixture | script/assets/workflow only |
-| 6 | Agents | tracker after U5 | `go test ./internal/adapters/agent ./internal/app` | isolated XDG/HOME/VS Code | adapters, fixtures, assets |
-| 7 | Acceptance | tracker after U6 | `go test ./...` | build + temp CLI matrix | acceptance tests and docs |
+| 6 | Agent core/OpenCode ≤800 | `feature/docmanager-installer-agent-core`, tracker after U5 | `go test ./internal/adapters/agent -run OpenCode` | isolated XDG JSON/JSONC | core/OpenCode only |
+| 7 | Codex/Claude ≤800 | tracker after U6 | `go test ./internal/adapters/agent -run 'Codex|Claude'` | temp HOME, TOML/0600 JSON | Codex/Claude only |
+| 8 | Copilot/Pi ≤800 | tracker after U7 | `go test ./internal/adapters/agent -run 'Copilot|Pi'` | isolated VS Code/Pi roots | Copilot/Pi only |
+| 9 | Agent orchestration ≤800 | tracker after U8 | `go test ./internal/app -run Agent` | fake adapters, temp roots | app orchestration only |
+| 10 | Acceptance | tracker after U9 | `go test ./...` | build + temp CLI matrix | acceptance tests and docs |
 
 Each branch starts from the tracker after its predecessor merges; only the tracker merges to main.
 
@@ -52,10 +55,14 @@ Each branch starts from the tracker after its predecessor merges; only the track
 
 ## Phase 3: Managed Agent Integration
 
-- [ ] 3.1 RED: fixtures `testdata/agent/{opencode,codex,claude,copilot,pi}/`; healthy OpenCode; unsupported/malformed preserve; Codex configure; Claude owned-only removal; drift/lock/route/probe no-write.
-- [ ] 3.2 GREEN: add pinned `internal/adapters/agent/` discovery/route/merge/ownership/guidance/launcher/probe and `assets/` guidance.
-- [ ] 3.3 RED: test independent operation states in `internal/app/agent_test.go`.
-- [ ] 3.4 GREEN: add `internal/app/agent.go` status orchestration.
+- [x] 3.1 RED: `internal/adapters/agent/core_opencode_test.go`, versioned `testdata/agent/opencode/` JSON/JSONC fixtures: registry/status, unknown/malformed/drift/symlink/route/probe no-write.
+- [x] 3.2 GREEN: add `internal/adapters/agent/{registry,route,merge,opencode}.go` lock/ownership/atomic merge/guidance/probe abstractions and OpenCode adapter.
+- [ ] 3.3 RED: `internal/adapters/agent/codex_claude_test.go`, versioned TOML and `~/.claude.json` fixtures: exact MCP/guidance merge/unmerge, unrelated preservation, 0600 mode, drift refusal.
+- [ ] 3.4 GREEN: add `internal/adapters/agent/{codex,claude}.go` managed merge/unmerge adapters.
+- [ ] 3.5 RED: `internal/adapters/agent/copilot_pi_test.go`: VS Code User OS paths, Pi MCP prerequisite/adapter, fixtures, merge/unmerge, guidance/status.
+- [ ] 3.6 GREEN: add `internal/adapters/agent/{copilot,pi}.go` routes, adapters, and managed guidance.
+- [ ] 3.7 RED: `internal/app/agent_test.go`: detect/configure/unconfigure/status/doctor for all agents; independent dimensions, dry-run/JSON, stable errors.
+- [ ] 3.8 GREEN: add `internal/app/agent.go` orchestration across all named adapters.
 
 ## Phase 4: Acceptance and Documentation
 
