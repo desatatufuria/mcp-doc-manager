@@ -481,3 +481,45 @@ Completed tasks: 3.5, 3.6.
 ### Aggregate Completion Status
 
 20/25 tasks complete. `tasks.md` confirms 1.1–1.4, 2.1–2.10, and 3.1–3.6 checked. Tasks 3.7–3.8 and 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 9 — Agent orchestration (tasks 3.7–3.8)
+
+Completed tasks: 3.7, 3.8.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 3.7 | `internal/app/agent_test.go` | Unit/integration | `go test ./internal/app -count=1` — exit 0 before app agent tests | `go test ./internal/app -run Agent -count=1` — build FAILED: `AgentService` and `AgentPort` undefined | `go test ./internal/app -run Agent -count=1` — exit 0; app agent tests PASS | All/detected/explicit selections; five independent dimensions; read-only detect/status/doctor; dry-run; preflight; unsupported Pi/unknown/drift; partial rollback plus rollback-failure detail | Extracted selection, inspection, plan, rollback, and stable-error helpers; focused tests remained PASS |
+| 3.8 | `internal/app/agent.go`, `internal/app/contract.go` | Unit/integration | Existing app baseline above | 3.7 referenced every service/port before production code existed | `go test ./internal/app ./internal/adapters/agent -count=1` — exit 0; both packages PASS | Isolated real OpenCode temporary-root configure/status/unconfigure plus five-port fake configure/dry-run/status/unconfigure/rollback harness | `gofmt`; focused, package, full-suite, and harness tests remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/app -run Agent -count=1` — exit 0; 5 AgentService tests PASS. |
+| App and agent package command and exact result | `go test ./internal/app ./internal/adapters/agent -count=1` — exit 0; both packages PASS. |
+| Full Go suite command and exact result | `go test ./...` — exit 0; all tested packages PASS; `assets` has no test files. |
+| Runtime harness command/scenario and exact result | `go test -v ./internal/app -run 'TestAgentService(MultiAgentHarness|PlansBeforeWritesAndRollsBackPartialConfigure|UsesRealAdapterAtTemporaryRoot)$' -count=1` — exit 0; fake five-agent dry-run/configure/status/unconfigure and rollback scenarios plus an isolated real OpenCode temporary-root lifecycle PASS. |
+| Formatting and diff checks | `test -z "$(gofmt -l cmd internal spike)"`; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/app/{agent,agent_test}.go`, the additive `Status.Agents` field in `internal/app/contract.go`, and the 3.7–3.8 task/progress entries. Adapters, CLI/TUI wiring, acceptance/native CI fixes, docs, MCP, receipt, and ledger behavior remain outside this boundary. |
+| Cleanup/process evidence | All tests use `t.TempDir()` roots or in-memory ports. The harness invokes no shell, package installer, user HOME/XDG, background process, or external subprocess; temporary files are removed by Go test cleanup. |
+
+### Work Unit 9 Apply Result Contract
+
+- status: success
+- executive_summary: Added headless application orchestration over injected adapter ports. It deterministically aggregates per-agent status, preflights every selected adapter before writes, returns JSON-ready plans, delegates all configuration semantics to adapters, and compensates prior mutations on later failure while preserving the original stable error.
+- artifacts: `internal/app/{agent,agent_test}.go`; `internal/app/contract.go`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`
+- next_recommended: sdd-apply for explicitly assigned tasks 4.1–4.3 only.
+- risks: No CLI registration, TUI, Gentle AI runtime/ownership dependency, acceptance/native CI fix, documentation, commit, push, or merge was added. Composition must inject the five approved adapter ports in a later boundary.
+- skill_resolution: paths-injected — sdd-apply, work-unit-commits, go-testing, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 9 child slice on `feature/docmanager-installer-agent-orchestration`, based on the tracker after Work Unit 8; no commit, push, merge, PR, acceptance, native CI, or documentation action.
+- native_token: retained by parent.
+- native_settlement_result: complete
+- changed_line_evidence: 375 product/test/contract/task lines plus 42 OpenSpec evidence lines = 417 total; `417 < 800` native work-unit budget.
+- evidence_revision: `sha256:13610f7161aa1a8bfa9596af39f62dd7d135929456c8a75594908d9cc55fb22b` — SHA-256 of the ordered per-file SHA-256 manifest for Work Unit 9 code, tests, contract addition, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+22/25 tasks complete. `tasks.md` confirms tasks 1.1–1.4, 2.1–2.10, and 3.1–3.8 are checked. Tasks 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
