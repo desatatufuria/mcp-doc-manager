@@ -235,3 +235,45 @@ None.
 
 - native_settlement_result: complete
 - Evidence revision: `sha256:1b1a05dae3b99bbbc0cbb35951762b2d0725768bc21095e78f63f4e9a057b0b8`
+
+## Work Unit 3 — Release Trust (re-sliced tasks 2.5–2.6)
+
+Completed tasks: 2.5, 2.6.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 2.5 | `internal/adapters/release/{trust,extract}_test.go` | Unit/Integration | N/A (new package) | `go test ./internal/adapters/release -run 'Trust|Extract'` — build failed: trust/extraction symbols undefined | Same command — exit 0; PASS | 19 subcases span valid and invalid trust, download, and archive paths | `gofmt`; focused, package, and full-suite tests remained PASS |
+| 2.6 | `internal/adapters/release/{trust,download,extract}.go` | Unit/Integration | New production files; RED coverage above | RED tests from 2.5 preceded every production primitive | `go test ./internal/adapters/release` — exit 0; PASS | Valid artifact download/extract versus host, redirect, size, digest, traversal, link, duplicate, overflow, and unexpected cases | Added explicit primary-key policy and isolated extraction directory; tests remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/adapters/release -run 'Trust|Extract'` — exit 0; `TestTrust` and `TestExtractTarGz` PASS. |
+| Release package test command and exact result | `go test ./internal/adapters/release` — exit 0; trust, download, and extraction tests PASS. |
+| Regression command and exact result | `go test ./...` — exit 0; `assets` has no tests; all tested packages PASS. |
+| Runtime harness command/scenario and exact result | `go test -v ./internal/adapters/release -run 'TestTrust|TestDownloadRejectsUntrustedResponses|TestExtractTarGz'` — exit 0; ephemeral in-memory Ed25519 manifest checks, `httptest.NewTLSServer` host/redirect/size/digest rejection, and `t.TempDir()` extraction rejection all PASS while preserving the sentinel target. |
+| Formatting and diff checks | `gofmt -l internal/adapters/release` — no output; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/release/{trust,download,extract}.go`, their two tests, and the 2.5–2.6 task/progress entries. No lifecycle, probe, install/upgrade, scripts, assets, workflow, agent, or documentation behavior is included. |
+| Cleanup/process evidence | `httptest` servers close via `defer`; every archive path uses `t.TempDir()` and failed extraction removes its generated directory. No shell execution, subprocess, persistent target replacement, or background process occurs. |
+
+### Work Unit 3 Apply Result Contract
+
+- status: success
+- executive_summary: Added manifest trust verification, bounded allowlisted HTTPS artifact download, and isolated tar.gz extraction primitives with closed deterministic errors. No binary lifecycle or release publication behavior was introduced.
+- artifacts: `internal/adapters/release/{trust,download,extract}.go`; `internal/adapters/release/{trust,extract}_test.go`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`
+- next_recommended: sdd-apply for explicitly assigned tasks 2.7–2.8 only
+- risks: The primitives intentionally do not install, replace, probe, or roll back binaries; those lifecycle safeguards remain Work Unit 4 scope.
+- skill_resolution: paths-injected — sdd-apply, go-testing, work-unit-commits, chained-pr
+- implementation_mode: Strict TDD
+- workload_boundary: approved feature-branch-chain Work Unit 3 child slice on `feature/docmanager-installer-release`, based on tracker `feature/docmanager-installer-agent-integration` after Work Unit 2; no PR, commit, push, merge, or release action.
+- total_changed_lines_including_preexisting_resliced_task_evidence: 525
+- native_budget: 525 < 800 changed lines
+- native_settlement_result: complete
+- evidence_revision: `sha256:6089b6821222f9462fb67b070a0c3934ccb09fa37d9f174d78712c6d2d2fc893` — ordered SHA-256 manifest of Work Unit 3 code, tests, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+10/21 tasks complete. `tasks.md` confirms ten checked tasks: 1.1–1.4 and 2.1–2.6. Ready for the next assigned batch; not ready for verification.
