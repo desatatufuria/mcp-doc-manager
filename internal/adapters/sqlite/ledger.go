@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 	_ "modernc.org/sqlite"
 )
 

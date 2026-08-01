@@ -1,4 +1,4 @@
-module github.com/gentleman-programming/repository-documentation-manager
+module github.com/desatatufuria/mcp-doc-manager
 
 go 1.26.0
 

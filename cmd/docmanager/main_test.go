@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 func TestCLIDocumentChangeVerifyAndLifecycleWithoutDocumentationMutation(t *testing.T) {
@@ -100,6 +100,44 @@ func TestCLIRejectsInvalidScope(t *testing.T) {
 	}
 	if after := cliGitOutput(t, repo, "status", "--porcelain=v1", "-z"); after != before {
 		t.Fatalf("Git status mutated: %q", after)
+	}
+}
+
+func TestCLIHeadlessHierarchyReturnsJSONResult(t *testing.T) {
+	repo := t.TempDir()
+	cliGit(t, repo, "init")
+
+	output := runCLI(t, "workspace", "status", "--target", repo, "--json")
+	var result struct {
+		Operation string `json:"operation"`
+		Outcome   string `json:"outcome"`
+		Status    struct {
+			Workspace *struct {
+				Root string `json:"root"`
+			} `json:"workspace"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode result: %v: %s", err, output)
+	}
+	if result.Operation != "workspace.status" || result.Outcome != "status" || result.Status.Workspace == nil || result.Status.Workspace.Root != repo {
+		t.Fatalf("workspace status = %#v", result)
+	}
+}
+
+func TestCLIAliasesAreDeprecatedOnlyInHumanOutput(t *testing.T) {
+	repo := t.TempDir()
+	cliGit(t, repo, "init")
+
+	human := runCLI(t, "install", "--target", repo)
+	if string(human) != "deprecated: use workspace install\n" {
+		t.Fatalf("install alias output = %q", human)
+	}
+	t.Cleanup(func() { runCLI(t, "uninstall", "--target", repo) })
+
+	machine := runCLI(t, "doctor", "--target", repo, "--json")
+	if string(machine) == "" || string(machine[:1]) != "{" || string(machine) == "deprecated: use workspace doctor\n" {
+		t.Fatalf("doctor JSON alias output = %q", machine)
 	}
 }
 

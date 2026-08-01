@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 
-	gitadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/git"
-	sqliteadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/sqlite"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/app"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
+	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
+	"github.com/desatatufuria/mcp-doc-manager/internal/app"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

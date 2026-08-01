@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 func TestLedgerSavesRebuildsAndVerifiesReceipts(t *testing.T) {

@@ -6,13 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
-	gitadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/git"
-	mcpadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/mcp"
-	sqliteadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/sqlite"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/app"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
+	mcpadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/mcp"
+	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
+	"github.com/desatatufuria/mcp-doc-manager/internal/app"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 func main() {
@@ -90,33 +91,101 @@ func run(args []string) error {
 			return err
 		}
 		return json.NewEncoder(os.Stdout).Encode(map[string]bool{"verified": true})
-	case "install":
-		fs := flag.NewFlagSet("install", flag.ContinueOnError)
-		target := fs.String("target", "", "repository target")
-		if err := fs.Parse(args[1:]); err != nil {
-			return domain.ErrUnsupportedRequest
-		}
-		return app.Install(*target)
-	case "doctor":
-		fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-		target := fs.String("target", "", "repository target")
-		if err := fs.Parse(args[1:]); err != nil {
-			return domain.ErrUnsupportedRequest
-		}
-		if err := app.Doctor(*target); err != nil {
-			return err
-		}
-		return json.NewEncoder(os.Stdout).Encode(map[string]bool{"git": true})
-	case "uninstall":
-		fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-		target := fs.String("target", "", "repository target")
-		if err := fs.Parse(args[1:]); err != nil {
-			return domain.ErrUnsupportedRequest
-		}
-		return app.Uninstall(*target)
+	case "release", "agent":
+		return runResource(args[0], args[1:])
+	case "workspace":
+		return runWorkspace(args[1:], false)
+	case "install", "doctor", "uninstall":
+		return runWorkspace(append([]string{args[0]}, args[1:]...), true)
 	default:
 		return domain.ErrUnsupportedRequest
 	}
+}
+
+func runResource(resource string, args []string) error {
+	if len(args) == 0 {
+		return &app.StableError{Code: "invalid_input", Classification: "invalid_input", Detail: "missing operation"}
+	}
+	request, asJSON, err := orchestrationFlags(resource+"."+args[0], args[1:])
+	if err != nil {
+		return err
+	}
+	return renderResult(app.Execute(context.Background(), request), asJSON)
+}
+
+func runWorkspace(args []string, alias bool) error {
+	if len(args) == 0 {
+		return &app.StableError{Code: "invalid_input", Classification: "invalid_input", Detail: "missing workspace operation"}
+	}
+	request, asJSON, err := orchestrationFlags("workspace."+args[0], args[1:])
+	if err != nil {
+		return err
+	}
+	if request.Target == "" {
+		request.Target, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	}
+	if stable := app.ValidateRequest(request); stable != nil {
+		return renderResult(app.Execute(context.Background(), request), asJSON)
+	}
+	if !request.DryRun {
+		switch request.Operation {
+		case app.OperationWorkspaceInstall:
+			err = app.Install(request.Target)
+		case app.OperationWorkspaceUninstall:
+			err = app.Uninstall(request.Target)
+		case app.OperationWorkspaceDoctor:
+			err = app.Doctor(request.Target)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	result := app.Execute(context.Background(), request)
+	if request.Operation == app.OperationWorkspaceInstall || request.Operation == app.OperationWorkspaceUninstall {
+		result.Outcome = app.OutcomeSuccess
+		result.Error = nil
+	}
+	if err := renderResult(result, asJSON); err != nil {
+		return err
+	}
+	if alias && !asJSON {
+		fmt.Fprintf(os.Stdout, "deprecated: use workspace %s\n", args[0])
+	}
+	return nil
+}
+
+func orchestrationFlags(operation string, args []string) (app.Request, bool, error) {
+	fs := flag.NewFlagSet(operation, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	manifestURL := fs.String("manifest-url", "", "manifest URL")
+	installDir := fs.String("install-dir", "", "installation directory")
+	version := fs.String("version", "", "version")
+	agent := fs.String("agent", "", "agent")
+	binary := fs.String("binary", "", "binary")
+	configRoot := fs.String("config-root", "", "configuration root")
+	target := fs.String("target", "", "workspace target")
+	enableHook := fs.Bool("enable-hook", false, "enable hook")
+	dryRun := fs.Bool("dry-run", false, "plan without writes")
+	asJSON := fs.Bool("json", false, "emit JSON")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return app.Request{}, false, &app.StableError{Code: "invalid_input", Classification: "invalid_input", Detail: "invalid command flags"}
+	}
+	return app.Request{Operation: app.Operation(operation), ManifestURL: *manifestURL, InstallDir: *installDir, Version: *version, Agent: *agent, Binary: *binary, ConfigRoot: *configRoot, Target: *target, EnableHook: *enableHook, DryRun: *dryRun}, *asJSON, nil
+}
+
+func renderResult(result app.Result, asJSON bool) error {
+	if asJSON || result.Outcome == app.OutcomeStatus || result.Outcome == app.OutcomePlanned {
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			return err
+		}
+	}
+	if result.Error != nil {
+		return result.Error
+	}
+	return nil
 }
 
 func requestFlags(args []string) (app.DocumentChangeRequest, error) {
@@ -153,6 +222,10 @@ func verifyFlags(args []string) (app.DocumentChangeRequest, domain.Receipt, erro
 }
 
 func classify(err error) string {
+	var stable *app.StableError
+	if errors.As(err, &stable) {
+		return stable.Code
+	}
 	for _, typed := range []error{domain.ErrInvalidScope, domain.ErrNotRepository, domain.ErrOutsideRepository, domain.ErrGitUnavailable, domain.ErrUnsupportedRequest, domain.ErrLedgerFailure, domain.ErrReceiptMismatch, domain.ErrInvalidTarget} {
 		if errors.Is(err, typed) {
 			return typed.Error()

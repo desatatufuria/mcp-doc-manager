@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 const maxOutput = 1 << 20

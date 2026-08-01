@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	gitadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/git"
-	sqliteadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/sqlite"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
+	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 func TestPrePushScopeRejectsArbitraryTokens(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	gitadapter "github.com/gentleman-programming/repository-documentation-manager/internal/adapters/git"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 func TestDocumentChangeOutcomesAndFailuresDoNotMutate(t *testing.T) {

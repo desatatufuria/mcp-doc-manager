@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gentleman-programming/repository-documentation-manager/assets"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/assets"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 var writeOwnership = os.WriteFile

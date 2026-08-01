@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/repository-documentation-manager/internal/app"
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/internal/app"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

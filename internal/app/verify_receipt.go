@@ -4,7 +4,7 @@ import (
 	"context"
 	"reflect"
 
-	"github.com/gentleman-programming/repository-documentation-manager/internal/domain"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
 type VerifyReceipt struct {
