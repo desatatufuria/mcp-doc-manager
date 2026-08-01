@@ -5,9 +5,19 @@
 ## Quick path
 
 ```sh
-go build -o docmanager ./cmd/docmanager
-./docmanager document-change --repo /absolute/path/to/repository --scope staged
+curl -fsSL https://raw.githubusercontent.com/desatatufuria/mcp-doc-manager/main/scripts/install.sh | sh
+"$HOME/.local/bin/docmanager" document-change --repo /absolute/path/to/repository --scope staged
 ```
+
+This tokenless command works after the GitHub repository is public and at least one release exists. The installer embeds its public trust root, verifies the latest release's signed manifest, and installs only Linux/macOS amd64/arm64 release archives. For a reproducible install, pin a published tag:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/desatatufuria/mcp-doc-manager/main/scripts/install.sh | DOCMANAGER_VERSION=vX.Y.Z sh
+```
+
+The installer requires `curl`, `openssl`, `python3`, `tar`, and either `sha256sum` or `shasum`. It installs to `$HOME/.local/bin/docmanager` by default and deliberately does **not** change `PATH`; use the absolute path above or add that directory to your shell configuration yourself. Windows has a native CI smoke target but is **not** a supported distribution target.
+
+For source builds, agent configuration boundaries, compatibility, and recovery, see [Installers](docs/installers.md), [Agents](docs/agents.md), [Compatibility](docs/compatibility.md), and [Recovery](docs/recovery.md).
 
 The command requires exactly one scope:
 
@@ -17,7 +27,7 @@ The command requires exactly one scope:
 | Staged changes | `document-change --repo /repo --scope staged` |
 | Worktree changes | `document-change --repo /repo --scope worktree` |
 
-Build from source with Go 1.26. Native CI validates Linux/amd64, macOS/arm64, and Windows/amd64; release artifacts are built with `CGO_ENABLED=0` for Linux/amd64, macOS/arm64, and Windows/amd64.
+Build from source with Go 1.26. Linux native package smoke passed locally; CGo-free Linux/amd64, macOS/arm64, and Windows/amd64 cross-builds passed locally. Native macOS and Windows reruns remain pending until GitHub Actions confirms them.
 
 ## CLI and receipts
 
@@ -36,9 +46,10 @@ Verification accepts only the exact, successful analysis whose selected Git cont
 | `docmanager document-change ...` | Explicitly analyze one selected scope. |
 | `docmanager verify ...` | Recheck a content-bound receipt without an LLM or repository mutation. |
 | `docmanager mcp` | Start the stdio MCP server. |
-| `docmanager install --target /repo` | Install owned local guidance and optional hook configuration. |
-| `docmanager doctor --target /repo` | Validate Git and owned local assets without changing them. |
-| `docmanager uninstall --target /repo` | Remove only owned `.docmanager/` state. |
+| `docmanager workspace install --target /repo` | Install owned local guidance; add a hook only with `--enable-hook`. |
+| `docmanager workspace doctor --target /repo` | Validate Git and owned local assets without changing them. |
+| `docmanager workspace uninstall --target /repo` | Remove only owned `.docmanager/` state. |
+| `docmanager install|doctor|uninstall --target /repo` | Deprecated human-output aliases for the matching workspace operation for one major version. |
 
 ## Read-only MCP
 

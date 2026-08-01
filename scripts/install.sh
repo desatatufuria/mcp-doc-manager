@@ -2,7 +2,7 @@
 # Bootstrap verifies a signed manifest as data; it never evaluates downloaded text.
 set -eu
 
-release_base=${DOCMANAGER_RELEASE_BASE:-https://github.com/desatatufuria/mcp-doc-manager/releases/download}
+release_base=${DOCMANAGER_RELEASE_BASE:-https://github.com/desatatufuria/mcp-doc-manager/releases}
 version=${DOCMANAGER_VERSION:-latest}
 install_dir=${DOCMANAGER_INSTALL_DIR:-"$HOME/.local/bin"}
 os_name=${DOCMANAGER_OS:-$(uname -s | tr '[:upper:]' '[:lower:]')}
@@ -16,16 +16,28 @@ case "$os_name/$arch" in
   *) printf '%s\n' "unsupported platform: $os_name/$arch" >&2; exit 1 ;;
 esac
 case "$release_base" in https://github.com/*|https://objects.githubusercontent.com/*) ;; *) printf '%s\n' 'release URL is not allowlisted HTTPS' >&2; exit 1 ;; esac
-
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-trust_dir=${DOCMANAGER_TRUST_DIR:-"$script_dir/../assets/release"}
-trust_file="$trust_dir/trust.json"
-public_key="$trust_dir/public-key.pem"
-test -f "$trust_file" && test -f "$public_key" || { printf '%s\n' 'local public trust metadata is missing' >&2; exit 1; }
+case "$version" in
+  latest) manifest_base="$release_base/latest/download" ;;
+  v*)
+    case "$version" in *[!A-Za-z0-9._-]*) printf '%s\n' 'release version is invalid' >&2; exit 1 ;; esac
+    manifest_base="$release_base/download/$version"
+    ;;
+  *) printf '%s\n' 'release version must be latest or a v-prefixed tag' >&2; exit 1 ;;
+esac
 command -v curl >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || { printf '%s\n' 'curl, openssl, and python3 are required' >&2; exit 1; }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/docmanager-install.XXXXXX") || exit 1
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+trust_file="$tmp/trust.json"
+public_key="$tmp/public-key.pem"
+cat > "$trust_file" <<'TRUST_JSON'
+{"schema":1,"key_id":"docmanager-2026-01","public_key":"public-key.pem"}
+TRUST_JSON
+cat > "$public_key" <<'PUBLIC_KEY'
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAPZPPg6utUP67tINU9eniIPpe5yApudZmUejC+tsVuTI=
+-----END PUBLIC KEY-----
+PUBLIC_KEY
 download() {
   destination=$1
   url=$2
@@ -42,8 +54,8 @@ sha256() {
   fi
 }
 
-download "$tmp/manifest.json" "$release_base/$version/manifest.json" 1048576 || { printf '%s\n' 'unable to fetch trusted manifest' >&2; exit 1; }
-download "$tmp/manifest.sig" "$release_base/$version/manifest.sig" 1048576 || { printf '%s\n' 'unable to fetch manifest signature' >&2; exit 1; }
+download "$tmp/manifest.json" "$manifest_base/manifest.json" 1048576 || { printf '%s\n' 'unable to fetch trusted manifest' >&2; exit 1; }
+download "$tmp/manifest.sig" "$manifest_base/manifest.sig" 1048576 || { printf '%s\n' 'unable to fetch manifest signature' >&2; exit 1; }
 openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -in "$tmp/manifest.json" -sigfile "$tmp/manifest.sig" >/dev/null 2>&1 || { printf '%s\n' 'manifest signature verification failed' >&2; exit 1; }
 read_artifact=$(python3 - "$tmp/manifest.json" "$os_name" "$arch" "$trust_file" <<'PY'
 import datetime, hashlib, json, sys
@@ -75,7 +87,7 @@ tar -xzf "$tmp/archive.tar.gz" -C "$tmp" docmanager || { printf '%s\n' 'archive 
 test -f "$tmp/docmanager" && test ! -L "$tmp/docmanager" || { printf '%s\n' 'archive binary is unsafe' >&2; exit 1; }
 mkdir -p "$install_dir" && test ! -L "$install_dir" || { printf '%s\n' 'install directory is unsafe' >&2; exit 1; }
 install_tmp=$(mktemp "$install_dir/.docmanager.XXXXXX") || exit 1
-chmod 755 "$tmp/docmanager"
 cp "$tmp/docmanager" "$install_tmp"
+chmod 755 "$install_tmp"
 mv -f "$install_tmp" "$install_dir/docmanager"
 printf '%s\n' "installed docmanager to $install_dir/docmanager"
