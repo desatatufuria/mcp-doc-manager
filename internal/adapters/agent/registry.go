@@ -8,13 +8,14 @@ import (
 )
 
 var (
-	ErrLocked            = errors.New("agent configuration is locked")
-	ErrDrift             = errors.New("managed agent configuration drifted")
-	ErrOwnership         = errors.New("agent configuration is not owned")
-	ErrMalformedConfig   = errors.New("malformed agent configuration")
-	ErrUnsupportedConfig = errors.New("unsupported agent configuration")
-	ErrUnsafeRoute       = errors.New("unsafe agent configuration route")
-	ErrProbeFailed       = errors.New("agent probe failed")
+	ErrLocked              = errors.New("agent configuration is locked")
+	ErrDrift               = errors.New("managed agent configuration drifted")
+	ErrOwnership           = errors.New("agent configuration is not owned")
+	ErrMalformedConfig     = errors.New("malformed agent configuration")
+	ErrUnsupportedConfig   = errors.New("unsupported agent configuration")
+	ErrUnsafeRoute         = errors.New("unsafe agent configuration route")
+	ErrProbeFailed         = errors.New("agent probe failed")
+	ErrPrerequisiteMissing = errors.New("agent prerequisite missing")
 )
 
 const fixtureProvenanceV1 = "docmanager/agent-fixture/v1"
