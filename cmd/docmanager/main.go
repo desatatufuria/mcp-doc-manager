@@ -130,23 +130,27 @@ func runWorkspace(args []string, alias bool) error {
 	if stable := app.ValidateRequest(request); stable != nil {
 		return renderResult(app.Execute(context.Background(), request), asJSON)
 	}
+	result := app.Execute(context.Background(), request)
 	if !request.DryRun {
+		var status app.WorkspaceStatus
 		switch request.Operation {
 		case app.OperationWorkspaceInstall:
-			err = app.Install(request.Target)
+			status, err = app.WorkspaceInstall(request.Target, request.EnableHook)
 		case app.OperationWorkspaceUninstall:
-			err = app.Uninstall(request.Target)
+			status, err = app.WorkspaceUninstall(request.Target)
 		case app.OperationWorkspaceDoctor:
-			err = app.Doctor(request.Target)
+			status, err = app.WorkspaceDoctor(request.Target)
+		case app.OperationWorkspaceStatus:
+			status, err = app.WorkspaceStatusFor(request.Target)
 		}
 		if err != nil {
-			return err
+			return renderResult(workspaceFailure(request, err), asJSON)
 		}
-	}
-	result := app.Execute(context.Background(), request)
-	if request.Operation == app.OperationWorkspaceInstall || request.Operation == app.OperationWorkspaceUninstall {
-		result.Outcome = app.OutcomeSuccess
-		result.Error = nil
+		result.Status = &app.Status{Workspace: &status}
+		if request.Operation == app.OperationWorkspaceInstall || request.Operation == app.OperationWorkspaceUninstall {
+			result.Outcome = app.OutcomeSuccess
+			result.Error = nil
+		}
 	}
 	if err := renderResult(result, asJSON); err != nil {
 		return err
@@ -155,6 +159,16 @@ func runWorkspace(args []string, alias bool) error {
 		fmt.Fprintf(os.Stdout, "deprecated: use workspace %s\n", args[0])
 	}
 	return nil
+}
+
+func workspaceFailure(request app.Request, err error) app.Result {
+	code := "ownership"
+	if errors.Is(err, app.ErrWorkspaceDrift) {
+		code = "drift"
+	} else if errors.Is(err, app.ErrWorkspaceTarget) {
+		code = "invalid_input"
+	}
+	return app.Result{Operation: request.Operation, Target: request.Target, Outcome: app.OutcomeFailure, Changes: []app.Change{}, Error: &app.StableError{Code: code, Classification: code, Detail: err.Error()}}
 }
 
 func orchestrationFlags(operation string, args []string) (app.Request, bool, error) {
