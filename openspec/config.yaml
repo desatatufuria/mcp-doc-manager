@@ -1,40 +1,40 @@
 schema: spec-driven
 
 context: |
-  Project: notify-opencode
-  Tech stack: Not established; repository has no implementation or manifest files.
-  Architecture: Not established; future scope is a repository-only documentation manager CLI and MCP.
-  Testing: No runner, test files, coverage, linting, type-checking, or formatter detected.
-  Style: No project conventions detected; technical artifacts are written in English.
-  Repository state: Git repository on main with no commits, no remote, and no tracked files.
+  Project: github.com/desatatufuria/mcp-doc-manager (canonical identity).
+  Module: github.com/gentleman-programming/repository-documentation-manager (mismatched; report only, do not change).
+  Tech stack: Go 1.26 with github.com/modelcontextprotocol/go-sdk and modernc.org/sqlite.
+  Architecture: CLI and stdio MCP entrypoints over internal domain, application, Git, and SQLite adapters.
+  Testing: Go standard testing; unit and integration coverage use temporary repositories and MCP stdio.
+  Style: gofmt, go vet, package-oriented internal boundaries; technical artifacts are English.
 
-strict_tdd: false
+strict_tdd: true
 
 testing:
-  detected: 2026-07-26
-  strict_tdd: false
-  reason: No test runner or implementation stack is present.
+  detected: 2026-08-01
+  strict_tdd: true
+  reason: No explicit Strict TDD marker was found; a Go test runner is available, so Strict TDD defaults to enabled.
   test_runner:
-    available: false
-    command: ""
-    framework: ""
+    available: true
+    command: "go test ./..."
+    framework: "Go standard library testing"
   layers:
-    unit: false
-    integration: false
+    unit: true
+    integration: true
     e2e: false
   coverage:
-    available: false
-    command: ""
+    available: true
+    command: "go test -cover ./..."
   quality:
     linter:
       available: false
       command: ""
     type_checker:
-      available: false
-      command: ""
+      available: true
+      command: "go test ./..."
     formatter:
-      available: false
-      command: ""
+      available: true
+      command: "gofmt -l cmd internal spike"
 
 rules:
   proposal:
@@ -50,13 +50,13 @@ rules:
     - Keep each task completable in one session.
   apply:
     guidelines:
-      - Establish project conventions before extending the codebase.
+      - Follow the internal domain, application, and adapter package boundaries.
       - Follow the approved design and task plan.
-    tdd: false
-    test_command: ""
+    tdd: true
+    test_command: "go test ./..."
   verify:
-    test_command: ""
-    build_command: ""
+    test_command: "go test ./..."
+    build_command: "go build ./cmd/docmanager"
     coverage_threshold: 0
   archive:
     - Warn before merging destructive deltas.
