@@ -440,3 +440,44 @@ Completed tasks: 3.3, 3.4.
 ### Aggregate Completion Status
 
 18/25 tasks complete. `tasks.md` confirms 1.1–1.4, 2.1–2.10, and 3.1–3.4 checked. Tasks 3.5–3.8 and 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 8 — Copilot/Pi (tasks 3.5–3.6)
+
+Completed tasks: 3.5, 3.6.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 3.5 | `internal/adapters/agent/copilot_pi_test.go` | Unit/integration | `go test ./internal/adapters/agent -count=1` — exit 0 before the new test file | `go test ./internal/adapters/agent -run 'Copilot|Pi' -count=1` — build failed: Copilot/Pi constructors, routes, options, and prerequisite error undefined | Same focused command — exit 0; Copilot/Pi tests PASS | Linux/darwin/windows Copilot routes; Pi prerequisite absent/present; configure/status/unconfigure; idempotence; unrelated preservation; malformed/conflict/drift/symlink/route/lock/probe no-write branches | Extracted shared JSON ownership/mutation helper; focused, package, and full-suite tests remained PASS |
+| 3.6 | `internal/adapters/agent/{copilot,pi,json_agent}.go` | Unit/integration | RED suite from 3.5 preceded production code | 3.5 referenced all new constructors/routes before implementation | `go test ./internal/adapters/agent -count=1` — exit 0; package PASS | Copilot `servers` array command and Pi `mcpServers` command/args entries exercise distinct routes and managed shapes | `gofmt -w internal/adapters/agent`; focused/package/full-suite checks remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/adapters/agent -run 'Copilot|Pi' -count=1` — exit 0; all focused Copilot/Pi tests PASS. |
+| Package and regression commands | `go test ./internal/adapters/agent -count=1` — exit 0; package PASS. `go test ./...` — exit 0; all tested packages PASS; `assets` has no test files. |
+| Runtime harness command/scenario and exact result | `go test -v ./internal/adapters/agent -run 'Test(CopilotConfigureStatusAndUnconfigurePreservesServers|PiPrerequisiteConfigureStatusAndUnconfigure)$' -count=1` — exit 0; isolated `t.TempDir()` VS Code and Pi roots configured, reported healthy status, unconfigured, preserved unrelated MCP entries, and rejected the unavailable Pi adapter without writing. |
+| Formatting and diff checks | `test -z "$(gofmt -l cmd internal spike)"`; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/agent/{copilot,pi,json_agent}.go`, `registry.go` prerequisite error, `copilot_pi_test.go`, `testdata/agent/{copilot,pi}/`, and the 3.5–3.6 task/progress entries. OpenCode/Codex/Claude, app/CLI orchestration, acceptance, MCP, receipt, and ledger behavior remain outside this boundary. |
+| Cleanup/process evidence | Every test and harness uses `t.TempDir()` roots plus injected discovery/runner functions. No user HOME, XDG, APPDATA, npm install, shell, background process, or external subprocess is used; locks and atomic temporary files are removed before return. |
+
+### Work Unit 8 Apply Result Contract
+
+- status: success
+- executive_summary: Added fixture-pinned GitHub Copilot VS Code User and Pi MCP adapters. Copilot owns only `servers.docmanager`; Pi owns only `mcpServers.docmanager`, requires an already-available Pi adapter, and never installs npm packages. Both adapters maintain independent detection dimensions, managed guidance, locks, atomic writes, drift refusal, and bounded argv-only probes.
+- artifacts: `internal/adapters/agent/{copilot,pi,json_agent}.go`; `registry.go`; `copilot_pi_test.go`; `testdata/agent/{copilot,pi}/`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`
+- next_recommended: sdd-apply for explicitly assigned tasks 3.7–3.8 only.
+- risks: OS route selection is tested through isolated injected roots; no actual VS Code, Pi, npm, user configuration, or app/CLI orchestration was invoked.
+- skill_resolution: paths-injected — sdd-apply, work-unit-commits, go-testing, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 8 child slice on `feature/docmanager-installer-copilot-pi`, based on the tracker after Work Unit 7; no commit, push, merge, PR, app orchestration, acceptance, or CI-regression action.
+- native_token: retained by parent.
+- native_settlement_result: complete
+- changed_line_evidence: 680 additions + 9 deletions = 689 total including task/progress evidence; `689 < 800` native work-unit budget.
+- evidence_revision: `sha256:e36da53488d89cf6920db777fb3b9c226275773796271fb7e66dcb7cda8d904a` — SHA-256 of the ordered per-file SHA-256 manifest for Work Unit 8 code, tests, fixtures, `registry.go`, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+20/25 tasks complete. `tasks.md` confirms 1.1–1.4, 2.1–2.10, and 3.1–3.6 checked. Tasks 3.7–3.8 and 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.

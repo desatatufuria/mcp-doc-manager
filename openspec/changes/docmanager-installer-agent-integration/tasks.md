@@ -59,8 +59,8 @@ Each branch starts from the tracker after its predecessor merges; only the track
 - [x] 3.2 GREEN: add `internal/adapters/agent/{registry,route,merge,opencode}.go` lock/ownership/atomic merge/guidance/probe abstractions and OpenCode adapter.
 - [x] 3.3 RED: `internal/adapters/agent/codex_claude_test.go`, versioned TOML and `~/.claude.json` fixtures: exact MCP/guidance merge/unmerge, unrelated preservation, 0600 mode, drift refusal.
 - [x] 3.4 GREEN: add `internal/adapters/agent/{codex,claude}.go` managed merge/unmerge adapters.
-- [ ] 3.5 RED: `internal/adapters/agent/copilot_pi_test.go`: VS Code User OS paths, Pi MCP prerequisite/adapter, fixtures, merge/unmerge, guidance/status.
-- [ ] 3.6 GREEN: add `internal/adapters/agent/{copilot,pi}.go` routes, adapters, and managed guidance.
+- [x] 3.5 RED: `internal/adapters/agent/copilot_pi_test.go`: VS Code User OS paths, Pi MCP prerequisite/adapter, fixtures, merge/unmerge, guidance/status.
+- [x] 3.6 GREEN: add `internal/adapters/agent/{copilot,pi}.go` routes, adapters, and managed guidance.
 - [ ] 3.7 RED: `internal/app/agent_test.go`: detect/configure/unconfigure/status/doctor for all agents; independent dimensions, dry-run/JSON, stable errors.
 - [ ] 3.8 GREEN: add `internal/app/agent.go` orchestration across all named adapters.
 
