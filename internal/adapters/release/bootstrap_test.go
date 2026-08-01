@@ -54,21 +54,22 @@ func TestReleaseBootstrapAssetsDefineSignedSupportedArchivesWithoutPrivateMateri
 		t.Fatal("bootstrap escalates privileges or edits a shell profile")
 	}
 
-	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || strings.Contains(path, string(filepath.Separator)+".git"+string(filepath.Separator)) {
-			return nil
-		}
-		name := strings.ToLower(entry.Name())
-		if strings.Contains(name, "private") || strings.Contains(name, "signing-key") || strings.HasSuffix(name, ".key") {
-			return os.ErrPermission
-		}
-		return nil
-	})
+	tracked, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()
 	if err != nil {
-		t.Fatalf("committed private signing material detected: %v", err)
+		t.Fatalf("list committed files: %v", err)
+	}
+	for _, path := range strings.Split(string(tracked), "\x00") {
+		name := strings.ToLower(filepath.Base(path))
+		if strings.Contains(name, "private") || strings.Contains(name, "signing-key") || strings.HasSuffix(name, ".key") {
+			t.Fatalf("committed private signing material detected: %s", path)
+		}
+	}
+	privatePath := filepath.Join("assets", "release", "private-key.pem")
+	if err := exec.Command("git", "-C", root, "check-ignore", "--quiet", privatePath).Run(); err != nil {
+		t.Fatalf("local private signing key path is not ignored: %v", err)
+	}
+	if err := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", privatePath).Run(); err == nil {
+		t.Fatal("local private signing key is tracked")
 	}
 }
 
