@@ -35,10 +35,10 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Transactional Workspace and Release
 
-- [ ] 2.1 RED: `internal/adapters/filesystem/transaction_test.go`: lock, backup digest/mode, fsync-rename, drift, ownership, symlink, route escape; no mutation.
-- [ ] 2.2 GREEN: add `internal/adapters/filesystem/transaction.go`, `internal/app/workspace.go`, external state, and workspace install/uninstall/status/doctor.
-- [ ] 2.3 RED: `internal/app/workspace_test.go`: default absent, opt-in, drift refusal, non-root Git selectors.
-- [ ] 2.4 GREEN: implement explicit hooks in `internal/app/workspace.go` and `cmd/docmanager/main.go`.
+- [x] 2.1 RED: `internal/adapters/filesystem/transaction_test.go`: lock, backup digest/mode, fsync-rename, drift, ownership, symlink, route escape; no mutation.
+- [x] 2.2 GREEN: add `internal/adapters/filesystem/transaction.go`, `internal/app/workspace.go`, external state, and workspace install/uninstall/status/doctor.
+- [x] 2.3 RED: `internal/app/workspace_test.go`: default absent, opt-in, drift refusal, non-root Git selectors.
+- [x] 2.4 GREEN: implement explicit hooks in `internal/app/workspace.go` and `cmd/docmanager/main.go`.
 - [ ] 2.5 RED: `internal/adapters/release/release_test.go`: valid Linux install, absent status; Windows; signature/expiry/revocation/rotation; HTTPS/redirect/size/digest; traversal/absolute/link/duplicate/decompression/unexpected entries; probe metacharacter/timeout/wrong binary; symlink/non-owned; health rollback.
 - [ ] 2.6 GREEN: add `internal/adapters/release/` and `internal/app/release.go`: trust, extraction, argv probe, atomic lifecycle.
 - [ ] 2.7 RED: test signed platform archives and non-evaluating bootstrap in `internal/adapters/release/bootstrap_test.go`.
