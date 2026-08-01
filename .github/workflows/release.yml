@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64 }
+          - { os: linux, arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CGo-free archive
+        env: { CGO_ENABLED: '0', GOOS: '${{ matrix.os }}', GOARCH: '${{ matrix.arch }}' }
+        run: |
+          set -eu
+          version="$GITHUB_REF_NAME"
+          name="docmanager_${version}_${GOOS}_${GOARCH}.tar.gz"
+          go build -trimpath -buildvcs=false -ldflags='-s -w' -o docmanager ./cmd/docmanager
+          tar -czf "$name" docmanager
+          mkdir -p out && mv "$name" out/
+      - uses: actions/upload-artifact@v4
+        with: { name: 'package-${{ matrix.os }}-${{ matrix.arch }}', path: out/* }
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Create canonical signed manifest
+        env: { PRIVATE_SIGNING_KEY: '${{ secrets.DOCMANAGER_RELEASE_SIGNING_KEY }}' }
+        run: |
+          set -eu
+          umask 077
+          key_file=$(mktemp)
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$PRIVATE_SIGNING_KEY" > "$key_file"
+          version="$GITHUB_REF_NAME"
+          for target in linux_amd64 linux_arm64 darwin_amd64 darwin_arm64; do test -f "out/docmanager_${version}_${target}.tar.gz"; done
+          python3 - "$version" "$GITHUB_REPOSITORY" > manifest.json <<'PY'
+          import datetime, hashlib, json, pathlib, sys
+          version, repo = sys.argv[1:]
+          artifacts = []
+          for os_name, arch in (("linux", "amd64"), ("linux", "arm64"), ("darwin", "amd64"), ("darwin", "arm64")):
+              path = pathlib.Path("out") / f"docmanager_{version}_{os_name}_{arch}.tar.gz"
+              payload = path.read_bytes()
+              artifacts.append({"version": version, "os": os_name, "arch": arch, "url": f"https://github.com/{repo}/releases/download/{version}/{path.name}", "size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
+          now = datetime.datetime.now(datetime.timezone.utc)
+          manifest = {"schema": 1, "key_id": json.load(open("assets/release/trust.json"))["key_id"], "issued": now.isoformat().replace("+00:00", "Z"), "expires": (now + datetime.timedelta(days=30)).isoformat().replace("+00:00", "Z"), "artifacts": artifacts}
+          print(json.dumps(manifest, separators=(",", ":"), sort_keys=True))
+          PY
+          openssl pkeyutl -sign -rawin -inkey "$key_file" -in manifest.json -out manifest.sig
+          openssl pkeyutl -verify -rawin -pubin -inkey assets/release/public-key.pem -in manifest.json -sigfile manifest.sig
+      - uses: softprops/action-gh-release@v2
+        with: { files: 'out/*.tar.gz\nmanifest.json\nmanifest.sig' }
