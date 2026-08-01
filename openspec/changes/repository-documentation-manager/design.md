@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-After a macOS/Linux/Windows spike, ship a Go binary with pure-Go SQLite and Tier-1 Go MCP SDK. It resolves scope, creates evidence, returns `update`, `create`, or `no-impact`, records receipt, and proposes (never applies) a patch.
+After a macOS/Linux/Windows spike, ship a Go binary with pure-Go SQLite and Tier-1 Go MCP SDK. It resolves scope, creates evidence, returns `update`, `create`, or `no-impact`, and records a receipt without modifying repository content.
 
 ## Architecture Decisions
 
@@ -11,7 +11,7 @@ After a macOS/Linux/Windows spike, ship a Go binary with pure-Go SQLite and Tier
 | Runtime | Go: Tier-1 MCP/runtime-free; Rust: stronger types but Tier-2 MCP/higher cost; TypeScript: Tier-1 MCP but Node/Bun surface | **Go, conditional on spike.** Best single-binary/MCP fit; reassess Rust if it fails. |
 | Boundaries | Shared adapters; domain/application ports | **Ports/adapters.** `domain` owns rules, `app` use cases, adapters I/O; CLI/MCP share evidence semantics. |
 | Truth and state | SQLite truth; Git truth + cache/ledger | **Git authoritative.** SQLite is rebuildable inventory, analysis, receipt, and migration state. |
-| Patch ownership | Tool applies; agent applies proposal | **Proposal only.** Target paths/unified diff may be returned; no write/apply command exists. |
+| Repository boundary | Tool writes or proposes patches; read-only analysis | **Read-only analysis.** Results identify candidate paths, rationale, confidence, and evidence; no patch output, write, or apply command exists. |
 | Gentle AI | Embedded integration; thin external-tool bridge | **Deferred and nonblocking.** Gentle AI only registers/lists the community tool and delegates `install --target`, `doctor --json`, and `uninstall --wiring-only` to the external binary; it embeds no runtime, duplicates no skills/guidance, and owns no data/receipts. |
 
 ## Data Flow
@@ -24,7 +24,7 @@ CLI document-change / MCP document_change
               |                         |
               v                         v
        AnalysisEngine <--- DocumentInventory
-              | outcome + rationale + proposal
+              | outcome + candidates + rationale
               v
    LedgerPort (analysis/receipt) -> response
 ```
@@ -43,7 +43,7 @@ The hook uses argument arrays—never shell, LLM, or mutation. It resolves stdin
 | File | Action | Description |
 |---|---|---|
 | `go.mod`, `cmd/docmanager/main.go` | Create | Module and entrypoint. |
-| `internal/domain/{scope,evidence,analysis,receipt,proposal}.go` | Create | Contracts, canonicalization, outcome/proposal. |
+| `internal/domain/{scope,evidence,analysis,receipt}.go` | Create | Contracts, canonicalization, outcomes, and receipts. |
 | `internal/app/{document_change,verify_receipt,install,doctor,uninstall}.go` | Create | Use cases. |
 | `internal/adapters/{git,sqlite,mcp,cli}/` | Create | I/O adapters. |
 | `.docmanager/` | Create at runtime | Ignored local SQLite database and receipts. |
@@ -56,7 +56,7 @@ The hook uses argument arrays—never shell, LLM, or mutation. It resolves stdin
 type ScopeKind string // range | staged | worktree
 type Outcome string   // update | create | no-impact
 type DocumentChangeRequest struct { Repository string; Scope Scope }
-type Report struct { Outcome Outcome; Evidence Evidence; Receipt Receipt; Proposal *PatchProposal }
+type Report struct { Outcome Outcome; Candidates []string; Rationale string; Confidence float64; Evidence Evidence; Receipt Receipt }
 type GitPort interface { Resolve(context.Context, string, Scope) (CanonicalEvidence, error) }
 type LedgerPort interface { Save(context.Context, Report) error; Verify(context.Context, ReceiptInput) (Verification, error) }
 ```
