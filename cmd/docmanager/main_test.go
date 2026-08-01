@@ -2,13 +2,45 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
+
+var docmanagerTestBinary string
+
+func TestMain(m *testing.M) {
+	buildDir, err := os.MkdirTemp("", "docmanager-test-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create docmanager test build directory: %v\n", err)
+		os.Exit(1)
+	}
+	binaryName := "docmanager"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	docmanagerTestBinary = filepath.Join(buildDir, binaryName)
+	command := exec.Command("go", "build", "-o", docmanagerTestBinary, ".")
+	if output, err := command.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(buildDir)
+		fmt.Fprintf(os.Stderr, "build docmanager test binary: %v: %s\n", err, output)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+	if err := os.RemoveAll(buildDir); err != nil {
+		fmt.Fprintf(os.Stderr, "remove docmanager test build directory: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
 
 func TestCLIDocumentChangeVerifyAndLifecycleWithoutDocumentationMutation(t *testing.T) {
 	repo := t.TempDir()
@@ -67,7 +99,7 @@ func TestCLIDocumentChangeVerifyAndLifecycleWithoutDocumentationMutation(t *test
 			t.Fatal(err)
 		}
 		output, err = runCLIError("verify", "--repo", repo, "--scope", "staged", "--receipt", string(rawTampered))
-		if err == nil || string(output) != "receipt_mismatch\nexit status 1\n" {
+		if err == nil || string(output) != "receipt_mismatch\n" {
 			t.Fatalf("tampered verify = %v, %s", err, output)
 		}
 	}
@@ -88,14 +120,14 @@ func TestCLIDocumentChangeVerifyAndLifecycleWithoutDocumentationMutation(t *test
 
 func TestCLIRejectsInvalidScope(t *testing.T) {
 	output, err := runCLIError("document-change", "--repo", t.TempDir(), "--scope", "invalid")
-	if err == nil || string(output) != "invalid_scope\nexit status 1\n" {
+	if err == nil || string(output) != "invalid_scope\n" {
 		t.Fatalf("invalid scope = %v, %s", err, output)
 	}
 	repo := t.TempDir()
 	cliGit(t, repo, "init")
 	before := cliGitOutput(t, repo, "status", "--porcelain=v1", "-z")
 	output, err = runCLIError("verify", "--repo", repo, "--scope", "invalid", "--receipt", `{}`)
-	if err == nil || string(output) != "invalid_scope\nexit status 1\n" {
+	if err == nil || string(output) != "invalid_scope\n" {
 		t.Fatalf("invalid verify scope = %v, %s", err, output)
 	}
 	if after := cliGitOutput(t, repo, "status", "--porcelain=v1", "-z"); after != before {
@@ -150,7 +182,7 @@ func TestCLIPrevalidatesRepositoryBeforeOpeningLedger(t *testing.T) {
 	}
 	before := cliGitOutput(t, repo, "status", "--porcelain=v1", "-z")
 	output, err := runCLIError("document-change", "--repo", subdir, "--scope", "staged")
-	if err == nil || string(output) != "outside_repository\nexit status 1\n" {
+	if err == nil || string(output) != "outside_repository\n" {
 		t.Fatalf("prevalidation = %v, %s", err, output)
 	}
 	if _, err := os.Stat(filepath.Join(subdir, ".docmanager")); !os.IsNotExist(err) {
@@ -162,17 +194,21 @@ func TestCLIPrevalidatesRepositoryBeforeOpeningLedger(t *testing.T) {
 }
 
 func runCLIError(args ...string) ([]byte, error) {
-	return exec.Command("go", append([]string{"run", "."}, args...)...).CombinedOutput()
+	return docmanagerCommand(args...).CombinedOutput()
 }
 
 func runCLI(t *testing.T, args ...string) []byte {
 	t.Helper()
-	command := exec.Command("go", append([]string{"run", "."}, args...)...)
+	command := docmanagerCommand(args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("docmanager %v: %v: %s", args, err, output)
 	}
 	return output
+}
+
+func docmanagerCommand(args ...string) *exec.Cmd {
+	return exec.Command(docmanagerTestBinary, args...)
 }
 
 func cliGit(t *testing.T, repo string, args ...string) {

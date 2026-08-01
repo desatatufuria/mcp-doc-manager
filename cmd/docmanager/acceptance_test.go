@@ -78,7 +78,7 @@ func TestAcceptanceMCPReceiptAndSQLiteRemainReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "acceptance-test", Version: "1.0.0"}, nil)
-	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: exec.Command("go", "run", ".", "mcp")}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: docmanagerCommand("mcp")}, nil)
 	if err != nil {
 		t.Fatalf("connect MCP server: %v", err)
 	}
