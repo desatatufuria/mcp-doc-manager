@@ -66,6 +66,6 @@ Each branch starts from the tracker after its predecessor merges; only the track
 
 ## Phase 4: Acceptance and Documentation
 
-- [ ] 4.1 RED: `cmd/docmanager/acceptance_test.go`: scenarios/JSON/dry-run/status/doctor/MCP/receipt/SQLite; macOS lexical `/var`→physical `/private/var`; reject symlink target/escape; Windows `docmanager.exe` build/PowerShell smoke.
-- [ ] 4.2 GREEN: fix `internal/app/lifecycle.go`, `.github/workflows/ci.yml`; verify Linux/macOS/Windows native package smoke, `go test ./...`, and `go build ./cmd/docmanager`.
+- [x] 4.1 RED: `cmd/docmanager/acceptance_test.go`: scenarios/JSON/dry-run/status/doctor/MCP/receipt/SQLite; macOS lexical `/var`→physical `/private/var`; reject symlink target/escape; Windows `docmanager.exe` build/PowerShell smoke.
+- [x] 4.2 GREEN: fix `internal/app/lifecycle.go`, `.github/workflows/ci.yml`; verify Linux/macOS/Windows native package smoke, `go test ./...`, and `go build ./cmd/docmanager`.
 - [ ] 4.3 Update `README.md`, `docs/{installers,agents,compatibility,recovery}.md`; verify bootstrap, recovery, aliases, consent, fixtures, rollback.

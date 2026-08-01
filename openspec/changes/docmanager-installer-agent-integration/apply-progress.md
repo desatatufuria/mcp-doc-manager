@@ -523,3 +523,45 @@ Completed tasks: 3.7, 3.8.
 ### Aggregate Completion Status
 
 22/25 tasks complete. `tasks.md` confirms tasks 1.1–1.4, 2.1–2.10, and 3.1–3.8 are checked. Tasks 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 10 — Final Runtime Acceptance (tasks 4.1–4.2)
+
+Completed tasks: 4.1, 4.2. Work Units 1–9 and their evidence above remain unchanged.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 4.1 | `cmd/docmanager/acceptance_test.go` | Integration/static | `go test ./internal/app ./cmd/docmanager -count=1` — exit 0 before changes | `go test ./cmd/docmanager -run 'TestAcceptance' -count=1` — FAIL: Windows workflow did not build `docmanager.exe` | Same command — exit 0; six acceptance tests PASS | Headless plan/status/doctor; symlink/traversal rejection; MCP+receipt+SQLite; adapter composition; macOS lexical path; Windows build/invocation | `gofmt`; focused tests remained PASS |
+| 4.2 | `internal/app/lifecycle.go`, `.github/workflows/ci.yml` | Integration/static | Existing lifecycle and CLI baseline above | 4.1 acceptance regression preceded canonical-path and workflow production changes | Focused acceptance and lifecycle commands — exit 0 | Physical Git-root equivalence versus final symlink/traversal rejection; matrix-selected Unix/Windows outputs | Minimal `EvalSymlinks` comparison and explicit output matrix; tests remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./cmd/docmanager -run 'TestAcceptance' -count=1` — exit 0; six acceptance tests PASS. `go test ./internal/app -run 'TestLifecycle|TestWorkspace' -count=1` — exit 0. |
+| Runtime harness command/scenario and exact result | Isolated `mktemp` repository plus isolated `HOME`, `XDG_STATE_HOME`, and `GIT_CONFIG_*`; native Linux binary ran workspace status, JSON dry-run, doctor, install, doctor, and uninstall. Exit 0; state was absent after dry-run and uninstall; temporary root was removed and confirmed absent. MCP acceptance used a temporary Git repo and foreground stdio server; it created/verified a receipt in the repository-local SQLite ledger without changing the staged Git state. |
+| Regression and quality commands | `go test ./... -count=1`, `go test -race ./... -count=1`, `go vet ./...`, `go build ./cmd/docmanager`, `test -z "$(gofmt -l cmd internal spike)"`, and `git diff --check` — all exit 0. The direct build artifact was removed afterward. |
+| Cross-build checks | CGo-free, trimpath, buildvcs-disabled Linux/amd64, Darwin/arm64, and Windows/amd64 (`.exe`) builds — exit 0; every temporary artifact was nonempty and cleanup passed. |
+| Native settlement | Linux package smoke: complete. Darwin and Windows native execution: unavailable on this Linux executor; no emulation was attempted. Pending external evidence: rerun `native-package-smoke` on `macos-latest` and `windows-latest` CI. |
+| Rollback boundary | Revert `cmd/docmanager/acceptance_test.go`, the canonical physical-root comparison in `internal/app/lifecycle.go`, the `native-package-smoke` output matrix in `.github/workflows/ci.yml`, and only the 4.1–4.2 task/progress entries. MCP tools, receipt format, SQLite ledger behavior, agent adapters, and documentation remain otherwise unchanged. |
+| Cleanup/process evidence | Every harness used `t.TempDir()` or `mktemp -d /tmp/opencode/...`; isolated HOME/XDG paths were never user paths. MCP and CLI subprocesses were foreground and closed before return. Temporary repositories, binaries, cross-build directories, locks, and direct-build output were removed. |
+
+### Work Unit 10 Apply Result Contract
+
+- status: success
+- executive_summary: Added behavior-first final acceptance coverage for headless CLI contracts, managed-agent composition, MCP receipt/SQLite preservation, path safety, macOS lexical/physical Git roots, and Windows package smoke agreement. Canonical root comparison now compares resolved physical paths only after rejecting a final symlink target or traversal; CI selects the executable name from its OS matrix.
+- artifacts: `cmd/docmanager/acceptance_test.go`; `internal/app/lifecycle.go`; `.github/workflows/ci.yml`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`
+- next_recommended: sdd-apply for task 4.3 only, then sdd-verify after its completion
+- risks: Native macOS and Windows runtime execution is pending CI evidence; local cross-build and static workflow agreement are not a substitute for those runners.
+- skill_resolution: paths-injected — sdd-apply, work-unit-commits, go-testing, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 10 child slice based on tracker after Unit 9; no commit, push, merge, publication, documentation, or user configuration mutation.
+- native_token: retained by parent.
+- native_settlement_result: partial_external_evidence_pending
+- changed_line_evidence: 195 new acceptance-test lines + 11 production/workflow changes + 4 task checkbox changes + this evidence entry; under the 800-line work-unit budget.
+- evidence_revision: `sha256:208e4bde8f5f277a48c0cfc5c299e45f25095c4fc18c1bc1aa11fab12a7d6c9c` — SHA-256 of the ordered per-file SHA-256 manifest for the acceptance test, lifecycle/workflow fixes, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+24/25 tasks complete. `tasks.md` confirms tasks 1.1–1.4, 2.1–2.10, 3.1–3.8, and 4.1–4.2 are checked. Task 4.3 documentation remains pending. Ready for the final documentation batch; not ready for verification.
