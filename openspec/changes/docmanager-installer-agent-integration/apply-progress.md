@@ -277,3 +277,44 @@ Completed tasks: 2.5, 2.6.
 ### Aggregate Completion Status
 
 10/21 tasks complete. `tasks.md` confirms ten checked tasks: 1.1–1.4 and 2.1–2.6. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 4 — Release Lifecycle (tasks 2.7–2.8)
+
+Completed tasks: 2.7, 2.8.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 2.7 | `internal/adapters/release/lifecycle_test.go` | Unit/Integration | `go test ./internal/adapters/release ./internal/app -run 'Lifecycle|Probe'` — exit 0 before lifecycle tests existed; no matching tests | Same command after adding tests — build failed with undefined `Lifecycle`, `ProbeResult`, and lifecycle errors | Same command — exit 0; all lifecycle/probe cases PASS | Literal `--version` argv; process failure, wrong binary, bounded timeout; symlink/drift/lock refusal; absent status; install/upgrade/doctor/rollback; failed health restoration; real subprocess harness | Added small state/ownership helpers; focused tests remained PASS |
+| 2.8 | `internal/adapters/release/lifecycle.go`, `internal/app/release.go` | Unit/Integration | `go test ./internal/app -run 'ReleaseService'` — no matching test before RED | Same command after `release_test.go` — build failed: undefined `ReleaseService` | `go test ./internal/adapters/release ./internal/app -run 'Lifecycle|Probe|ReleaseService'` — exit 0 | Closed read-only input refusal and absent release status; adapter lifecycle cases exercise mutation results | `gofmt`; package, full-suite, and harness tests remained PASS |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/adapters/release ./internal/app -run 'Lifecycle|Probe'` — exit 0; release lifecycle/probe tests PASS and app package has no matching lifecycle/probe test. |
+| Package and regression commands | `go test ./internal/adapters/release ./internal/app` — exit 0; both packages PASS. `go test ./...` — exit 0; `assets` has no tests and every tested package PASS. |
+| Runtime harness command/scenario and exact result | `go test -v ./internal/adapters/release -run 'TestLifecycleOwnedBinaryHarness'` — exit 0; a `t.TempDir()` owned executable was installed, upgraded, and atomically rolled back through the real bounded argv-only subprocess runner. |
+| Formatting and diff checks | `gofmt -l internal/adapters/release internal/app` — no output; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/release/{lifecycle,lifecycle_test}.go`, `internal/app/{release,release_test}.go`, and the 2.7–2.8 task/progress entries. Trust/download/extraction, MCP, receipt, ledger, workspace, bootstrap, assets, workflows, agents, acceptance, and documentation remain outside this boundary. |
+| Cleanup/process evidence | All lifecycle tests use `t.TempDir()` with explicit temporary state roots. The runtime harness starts one foreground owned-binary probe and it exits before the test returns; no shell interpolation, persistent installation, background process, or target outside the temporary directory is used. |
+
+### Work Unit 4 Apply Result Contract
+
+- status: success
+- executive_summary: Added an ownership-aware, lock-protected release lifecycle over extracted candidates, with argv-only bounded health probes, atomic replacement, prior-binary restoration, rollback, and read-only status/doctor. The app adapter maps those outcomes into the existing closed request/result/stable-error contract without CLI, MCP, receipt, ledger, workspace, bootstrap, asset, workflow, agent, or documentation changes.
+- artifacts: `internal/adapters/release/{lifecycle,lifecycle_test}.go`; `internal/app/{release,release_test}.go`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`; Engram topic `sdd/docmanager-installer-agent-integration/apply-progress`.
+- next_recommended: sdd-apply for explicitly assigned tasks 2.9–2.10 or the next approved work-unit slice.
+- risks: Installation is intentionally not wired to manifest retrieval, archive extraction, or CLI yet; `ReleaseService` accepts only the already-verified/extracted lifecycle boundary. No real installation was performed.
+- skill_resolution: paths-injected — sdd-apply, go-testing, work-unit-commits, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 4 child slice from `feature/docmanager-installer-agent-integration` after Work Unit 3; no commit, push, merge, PR, bootstrap, scripts, assets, workflow, agents, acceptance, or documentation action.
+- native_token: retained by parent.
+- changed_line_evidence: 617 code/test changed lines + 41 OpenSpec evidence lines = 658 total; `658 < 800`.
+- native_settlement_result: complete
+- evidence_revision: `sha256:6f3229cc6f46ff5ca3428a6bf69efbc60414b72619582852aae5d7af5fc174fc` — SHA-256 of the ordered per-file SHA-256 manifest for Work Unit 4 code, tests, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+12/21 tasks complete. `tasks.md` confirms tasks 1.1–1.4 and 2.1–2.8 checked. Ready for the next assigned batch; not ready for verification.

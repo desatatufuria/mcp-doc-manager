@@ -45,8 +45,8 @@ Each branch starts from the tracker after its predecessor merges; only the track
 - [x] 2.4 GREEN: implement explicit hooks in `internal/app/workspace.go` and `cmd/docmanager/main.go`.
 - [x] 2.5 RED: `internal/adapters/release/{trust,extract}_test.go`: signature/platform/expiry/revocation/rotation/recovery; HTTPS host/redirect/size/digest; traversal/absolute/link/duplicate/decompression/unexpected archive rejection without replacement.
 - [x] 2.6 GREEN: add `internal/adapters/release/{trust,download,extract}.go` manifest-authorized, isolated download/extraction primitives only.
-- [ ] 2.7 RED: `internal/adapters/release/lifecycle_test.go`: argv literal/timeout/failure/wrong binary; ownership/symlink refusal; install/upgrade/status/doctor/rollback; failed health restores prior binary.
-- [ ] 2.8 GREEN: add `internal/adapters/release/lifecycle.go` and `internal/app/release.go` around Unit 3 primitives only.
+- [x] 2.7 RED: `internal/adapters/release/lifecycle_test.go`: argv literal/timeout/failure/wrong binary; ownership/symlink refusal; install/upgrade/status/doctor/rollback; failed health restores prior binary.
+- [x] 2.8 GREEN: add `internal/adapters/release/lifecycle.go` and `internal/app/release.go` around Unit 3 primitives only.
 - [ ] 2.9 RED: test signed Linux/darwin amd64/arm64 archives, non-evaluating bootstrap, and no committed secret in `internal/adapters/release/bootstrap_test.go`.
 - [ ] 2.10 GREEN: add `scripts/install.sh`, `assets/release/`, `.github/workflows/release.yml` trusted metadata and platform packages without a private key.
 
