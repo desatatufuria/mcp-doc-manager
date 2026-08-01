@@ -318,3 +318,43 @@ Completed tasks: 2.7, 2.8.
 ### Aggregate Completion Status
 
 12/21 tasks complete. `tasks.md` confirms tasks 1.1–1.4 and 2.1–2.8 checked. Ready for the next assigned batch; not ready for verification.
+
+## Work Unit 5 — Release Packaging (tasks 2.9–2.10)
+
+Completed tasks: 2.9, 2.10.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 2.9 | `internal/adapters/release/bootstrap_test.go` | Integration/static | `go test ./internal/adapters/release -run Bootstrap` — exit 0, no matching tests before RED | Focused command — FAIL: missing `assets/release/trust.json`; later FAIL: missing macOS `shasum -a 256` fallback | `go test ./internal/adapters/release -run Bootstrap -count=1` — exit 0; 2 bootstrap tests PASS | Four Linux/darwin × amd64/arm64 matrix entries; valid public key/key ID; non-evaluating/no-secret static checks; isolated failed-download harness | Added macOS digest fallback and privilege/profile refusal assertions; focused tests remained PASS |
+| 2.10 | `scripts/install.sh`, `assets/release/`, `.github/workflows/release.yml` | Integration/static | New production assets; task 2.9 RED suite above | Bootstrap and package tests were written before every asset/workflow behavior; shell syntax and workflow assertions fail if required safety/build settings disappear | `bash -n scripts/install.sh`; static CGo-free/trimpath/secret-reference/no-private-key assertions — exit 0 | Four package targets plus bootstrap failure-before-install fixture; exact expected release archive template and package-set assertions | Extracted portable `sha256` helper; no further refactor needed |
+
+### Work Unit Evidence
+
+| Evidence | Result |
+|---|---|
+| Focused test command and exact result | `go test ./internal/adapters/release -run Bootstrap -count=1` — exit 0; 2 tests PASS. |
+| Release package and full Go tests | `go test ./internal/adapters/release` — exit 0; package PASS. `go test ./...` — exit 0; all tested packages PASS; `assets` reports no test files. |
+| Runtime harness command/scenario and exact result | `TestBootstrapFixtureFailsClosedWithoutInstalling` invokes `sh scripts/install.sh` with a temporary PATH whose `curl` fails, an allowlisted HTTPS base, a temporary install directory, and no network. Exit was nonzero with `unable to fetch trusted manifest`; `install/docmanager` remained absent. |
+| Shell/static checks | `bash -n scripts/install.sh && git diff --check` — exit 0. `shellcheck scripts/install.sh` — unavailable (command absent). `actionlint .github/workflows/release.yml` — unavailable (command absent). Static assertions for `CGO_ENABLED=0`, `-trimpath -buildvcs=false`, signing secret reference, and absence of private-key filenames — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/release/bootstrap_test.go`, `scripts/install.sh`, `assets/release/{trust.json,public-key.pem}`, `.github/workflows/release.yml`, and this Work Unit's task/progress entries. Trust/download/extraction/lifecycle, CLI, agents, acceptance regressions, and documentation remain outside this boundary. |
+| Cleanup/process evidence | The fixture uses `t.TempDir()` and a foreground shell process; its temporary PATH, install directory, and failed download are removed when the test returns. The script traps and removes its `mktemp -d` directory. No network request succeeds, no real install occurs, and no background process is created. |
+
+### Work Unit 5 Apply Result Contract
+
+- status: success
+- executive_summary: Added a fail-closed signed-manifest bootstrap, deterministic public trust metadata, and a GitHub release workflow for exactly Linux/darwin amd64/arm64 CGo-free archives. The bootstrap uses quoted data/argv, bounded HTTPS downloads, detached public-key signature verification, digest verification, temporary extraction, and atomic target replacement without sudo or shell-profile mutation.
+- artifacts: `internal/adapters/release/bootstrap_test.go`; `scripts/install.sh`; `assets/release/{trust.json,public-key.pem}`; `.github/workflows/release.yml`; `openspec/changes/docmanager-installer-agent-integration/{tasks,apply-progress}.md`; Engram topic `sdd/docmanager-installer-agent-integration/apply-progress`.
+- next_recommended: sdd-apply for explicitly assigned agent work only, or acceptance work after that dependency.
+- risks: Release publishing is unexecuted in this local work unit; maintainers must configure `DOCMANAGER_RELEASE_SIGNING_KEY` to match the committed public key. The separately recorded macOS lexical-root and Windows native-package smoke regressions remain acceptance tasks 4.1–4.2 and were not changed.
+- skill_resolution: paths-injected — sdd-apply, go-testing, work-unit-commits, chained-pr.
+- implementation_mode: Strict TDD.
+- workload_boundary: approved feature-branch-chain Work Unit 5 child slice based on the tracker after Work Unit 4; no commit, push, merge, PR, publication, agent, acceptance, or native-regression remediation action.
+- native_settlement_result: complete
+- changed_line_evidence: 245 product/test/script/asset/workflow lines + 42 OpenSpec task/progress evidence lines = 287 total; `287 < 800` native work-unit budget.
+- evidence_revision: `sha256:a1f271e603dbd2d645a8b8f290e45d4dc8793dae4d9fb539d8332f9725402cfd` — SHA-256 of the ordered per-file SHA-256 manifest for Work Unit 5 code, bootstrap test, public metadata, workflow, and `tasks.md`; excludes this self-describing progress file.
+
+### Aggregate Completion Status
+
+14/21 tasks complete. `tasks.md` confirms tasks 1.1–1.4 and 2.1–2.10 checked. Agent tasks 3.1–3.4 and acceptance/documentation tasks 4.1–4.3 remain pending. Ready for the next assigned batch; not ready for verification.

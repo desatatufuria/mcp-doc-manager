@@ -47,8 +47,8 @@ Each branch starts from the tracker after its predecessor merges; only the track
 - [x] 2.6 GREEN: add `internal/adapters/release/{trust,download,extract}.go` manifest-authorized, isolated download/extraction primitives only.
 - [x] 2.7 RED: `internal/adapters/release/lifecycle_test.go`: argv literal/timeout/failure/wrong binary; ownership/symlink refusal; install/upgrade/status/doctor/rollback; failed health restores prior binary.
 - [x] 2.8 GREEN: add `internal/adapters/release/lifecycle.go` and `internal/app/release.go` around Unit 3 primitives only.
-- [ ] 2.9 RED: test signed Linux/darwin amd64/arm64 archives, non-evaluating bootstrap, and no committed secret in `internal/adapters/release/bootstrap_test.go`.
-- [ ] 2.10 GREEN: add `scripts/install.sh`, `assets/release/`, `.github/workflows/release.yml` trusted metadata and platform packages without a private key.
+- [x] 2.9 RED: test signed Linux/darwin amd64/arm64 archives, non-evaluating bootstrap, and no committed secret in `internal/adapters/release/bootstrap_test.go`.
+- [x] 2.10 GREEN: add `scripts/install.sh`, `assets/release/`, `.github/workflows/release.yml` trusted metadata and platform packages without a private key.
 
 ## Phase 3: Managed Agent Integration
 
@@ -59,6 +59,6 @@ Each branch starts from the tracker after its predecessor merges; only the track
 
 ## Phase 4: Acceptance and Documentation
 
-- [ ] 4.1 RED: add `cmd/docmanager/acceptance_test.go` temp-repo matrix: scenarios, JSON/dry-run/status/doctor, MCP/receipt/SQLite.
-- [ ] 4.2 GREEN: resolve acceptance failures; run `go test ./...` and `go build ./cmd/docmanager`.
+- [ ] 4.1 RED: `cmd/docmanager/acceptance_test.go`: scenarios/JSON/dry-run/status/doctor/MCP/receipt/SQLite; macOS lexical `/var`→physical `/private/var`; reject symlink target/escape; Windows `docmanager.exe` build/PowerShell smoke.
+- [ ] 4.2 GREEN: fix `internal/app/lifecycle.go`, `.github/workflows/ci.yml`; verify Linux/macOS/Windows native package smoke, `go test ./...`, and `go build ./cmd/docmanager`.
 - [ ] 4.3 Update `README.md`, `docs/{installers,agents,compatibility,recovery}.md`; verify bootstrap, recovery, aliases, consent, fixtures, rollback.
