@@ -58,6 +58,27 @@ func TestReleaseBootstrapAssetsDefineSignedSupportedArchives(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowPublishesAllAssetsAndFailsClosed(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+
+	publication := `      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/*.tar.gz
+            manifest.json
+            manifest.sig
+          fail_on_unmatched_files: true`
+	if !strings.Contains(string(workflow), publication) {
+		t.Fatal("release publication must use newline-delimited asset patterns and fail on unmatched files")
+	}
+	if strings.Contains(string(workflow), `files: 'out/*.tar.gz\nmanifest.json\nmanifest.sig'`) {
+		t.Fatal("release publication uses one escaped-newline asset pattern")
+	}
+}
+
 func TestReleaseRepositoryTracksNoPrivateSigningMaterial(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
 	tracked, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()

@@ -63,4 +63,9 @@ jobs:
           openssl pkeyutl -sign -rawin -inkey "$key_file" -in manifest.json -out manifest.sig
           openssl pkeyutl -verify -rawin -pubin -inkey assets/release/public-key.pem -in manifest.json -sigfile manifest.sig
       - uses: softprops/action-gh-release@v2
-        with: { files: 'out/*.tar.gz\nmanifest.json\nmanifest.sig' }
+        with:
+          files: |
+            out/*.tar.gz
+            manifest.json
+            manifest.sig
+          fail_on_unmatched_files: true
