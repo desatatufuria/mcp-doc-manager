@@ -39,7 +39,121 @@
 - Risks: `Lifecycle` is intentionally persistence-only; application/MCP integration remains for later units. `ledger.go` is unchanged.
 - Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, shared phase protocol, and OpenSpec convention.
 
+## Unit 1 Hardening Final Registration (native evidence)
+
+This final registration preserves all prior attempts, corrections, interruptions, and hardening history. It records evidence only; the parent owns settlement.
+
+- Native final-registration acquire state: `proceed`.
+- Runtime acquire token: `sha256:cf0a14d59f10a4977ab21db1b357cb6f93e91065e5374990c081c06c30f8521d`.
+- Work unit: `unit-1-hardening-final-registration`.
+- Functional change in this objective: 0 Go source/test lines; no functional code or tests were changed.
+- Native hardening attempt: 66 changed lines, exceeding its 60-line forecast; the prior 50-line actor claim is not authoritative.
+- Delivery: PR 1b correction child only, with maintainer-approved `size:exception`; no Unit 2/3 work is included.
+
+### Artifact and Task Reconciliation
+
+- Tasks 1.1–1.8 are checked in `tasks.md`; Unit 2 (2.1–2.6) and Unit 3 (3.1–3.5) remain unchecked.
+- `tasks.md` was not edited because no checkbox was objectively wrong.
+- This objective edited only this evidence-registration section in `apply-progress.md`.
+
+### Unchanged Source/Test Identities
+
+| File | Git blob hash before verification | Git blob hash after verification |
+|---|---|---|
+| `internal/domain/lifecycle.go` | `8c29da58b4657463b61d3aa9b314d341ee1f0e89` | `8c29da58b4657463b61d3aa9b314d341ee1f0e89` |
+| `internal/domain/lifecycle_test.go` | `4af5265e7e95a1c599bf4ffa01d7e946ae3c7c1f` | `4af5265e7e95a1c599bf4ffa01d7e946ae3c7c1f` |
+| `internal/adapters/sqlite/lifecycle.go` | `772f5128a1a0bcf27012038fcd86bf6c3de51e1b` | `772f5128a1a0bcf27012038fcd86bf6c3de51e1b` |
+| `internal/adapters/sqlite/lifecycle_test.go` | `fb84692dea455a3d7dad07463d221599350b77f0` | `fb84692dea455a3d7dad07463d221599350b77f0` |
+
+Identities match before and after the bounded verification set.
+
+### Bounded Verification Set
+
+| Command | Exact result |
+|---|---|
+| `go test ./internal/domain ./internal/adapters/sqlite` | exit 0; 2 packages passed. |
+| `go test ./internal/adapters/sqlite -run Lifecycle -count=1 -v` | exit 0; 4 lifecycle tests passed, including 3 unsafe-path subtests. |
+| `go test ./...` | exit 0; 9 tested packages passed; `assets` had no test files. |
+| `gofmt -d internal/domain/lifecycle.go internal/domain/lifecycle_test.go internal/adapters/sqlite/lifecycle.go internal/adapters/sqlite/lifecycle_test.go` | exit 0; no output. |
+| `git diff --check` | exit 0; no output. |
+| `git diff --numstat origin/feat/living-documentation-lifecycle-01-domain-db` | exit 0; 402 additions + 77 deletions = 479 changed lines: `81/22`, `113/5`, `72/14`, `43/11`, `59/0`, `34/25` by listed diff order. |
+
+### Result Contract
+
+- Outcome: passed.
+- Evidence revision: `sha256:ca6a6d8c98794dc1b68f478ef89cbec5d0b8e49fc647fbab658823b1a02d2c26` (canonical final-registration evidence payload).
+- Diagnosis: unchanged hardened Unit 1 candidate passed the bounded native verification set; native/OpenSpec line evidence is reconciled without repeating the incorrect 50-line claim.
+- Harness disposition: reused; no process was started.
+- Cleanup evidence: Go test temporary workspaces are test-owned `t.TempDir()` resources and were cleaned by the test runtime; no durable state was created by this objective.
+- Process evidence: all six bounded commands exited 0; source/test blob identities remained identical.
+- Current-attempt changed-line count: 0 functional Go source/test lines; this evidence-only registration is within the 100-line ceiling.
+- Settlement: not claimed; parent settles once.
+
+### Remaining Scope
+
+- [ ] Unit 2 remains unimplemented.
+- [ ] Unit 3 remains unimplemented.
+
+## Unit 1 Hardening (PR 1b; Strict TDD)
+- Native correction baseline: 370; hardening incremental candidate: 50; native candidate: 420.
+- Evidence revision: `sha256:7a4fb92c651edb6517bc4a27507cf8a9ba299d715c914fdb0ed5b0eb0576977f`.
+### TDD Cycle Evidence
+| Task | RED | GREEN | Refactor |
+|---|---|---|---|
+| 1.5 | empty Operation failed | domain pass | gofmt pass |
+| 1.6 | key mismatch failed | NUL collision pass | gofmt pass |
+| 1.7 | 1.5/1.6 RED | minimal validation/encoding | gofmt pass |
+| 1.8 | N/A (evidence-only) | evidence below | N/A |
+### Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Focused | `go test ./internal/domain ./internal/adapters/sqlite` — exit 0; 2 packages. |
+| Runtime | `go test ./internal/adapters/sqlite -run Lifecycle -count=1 -v` — exit 0; 4 tests, 3 unsafe-path subtests. |
+| Full/check | `go test ./...`; `gofmt -d` touched Go files; `git diff --check` — exit 0. |
+| Rollback | Revert only `internal/domain/lifecycle.go`, `internal/domain/lifecycle_test.go`, `internal/adapters/sqlite/lifecycle.go`, `internal/adapters/sqlite/lifecycle_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and the complete cumulative `openspec/changes/living-documentation-lifecycle/apply-progress.md` artifact; no Unit 2/3 behavior. |
+- `size:exception` remains maintainer-approved only for PR 1b; its boundary is provenance/idempotency hardening.
+
 ## Remaining Tasks
 
 - [ ] 2.1–2.6 Radiography, planning, approvals, and staged MCP operations.
 - [ ] 3.1–3.5 Catalog, audit, verification, and final integration evidence.
+
+## Unit 1 Conformance-Correction (Strict TDD; attempt 1)
+
+This section supplements and preserves the original Unit 1 attempt and settlement evidence above; it does not settle this correction.
+
+### Result Contract
+
+- Outcome: passed
+- Evidence revision: `sha256:9d3fd816989f932b8aecd8c3e650970e72e02a5493fcbe8bf7f7167e27fcdf7d`
+- Original runtime reference: `sha256:6c86f3c533bc4a75f0be92d7a96f45ccf9ecb312226792c67e479a66b505ec5d`
+- Correction acquire token: `sha256:81150f8688c974213bc9a3adea39eae2063271406463563ac40c3e39083e4c36` (`state: proceed`)
+- Diagnosis: corrected Unit 1 authorization binding, typed lifecycle foundations, SQLite safety/migrations, complete declared-local provenance, and idempotency replay semantics.
+- Harness disposition: reused; no processes started.
+- Cleanup evidence: `t.TempDir()` SQLite workspaces were test-owned and cleaned by Go; no durable workspace state was created.
+- Process evidence: focused, runtime, full, format, and diff checks exited 0.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 1.1 / 1.3 | `internal/domain/lifecycle_test.go` | Unit | `go test ./internal/domain ./internal/adapters/sqlite` — 2 packages exit 0 | `go test ./internal/domain -run Lifecycle -count=1` — exit 1; missing completion/provenance/typed-state API | same command — exit 0; 2 lifecycle cases | batch, ordered actions, six drift bindings, inactive/completed states, typed states/results | gofmt; focused test exit 0 |
+| 1.2 / 1.4 | `internal/adapters/sqlite/lifecycle_test.go` | Integration | same focused baseline — exit 0 | `go test ./internal/domain ./internal/adapters/sqlite -run Lifecycle -count=1` — exit 1; missing provenance read/API | same command — exit 0; 4 lifecycle cases | symlink/nonregular/unsafe modes; v1→v2 migration and rollback; replay/divergence | gofmt; runtime harness exit 0 |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/domain ./internal/adapters/sqlite` — exit 0; 2 packages passed. |
+| Runtime harness | `go test ./internal/adapters/sqlite -run Lifecycle -count=1 -v` — exit 0; 4 lifecycle tests passed, including 3 unsafe-path subtests. |
+| Full suite | `go test ./...` — exit 0; 9 tested packages passed and `assets` reported no test files. |
+| Final check-only | `gofmt -d` on the four touched Go files and `git diff --check` — exit 0 with no output. |
+| Rollback boundary | Revert only `internal/domain/lifecycle.go`, `internal/domain/lifecycle_test.go`, `internal/adapters/sqlite/lifecycle.go`, `internal/adapters/sqlite/lifecycle_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and the complete cumulative `openspec/changes/living-documentation-lifecycle/apply-progress.md` artifact; `ledger.go` and all Unit 2/3 paths remain untouched. |
+
+### Delivery and Remaining Risk
+
+- PR boundary: feature-branch-chain correction child, base `feat/living-documentation-lifecycle-01-domain-db`; Unit 2 must base on this correction.
+- Incremental candidate changed-line count: 329 Go lines plus 40 Unit 1 OpenSpec evidence lines = 369, below the 400-line ceiling.
+- Ownership boundary: portability permits proof of non-symlink directories and no group/world write bits; this implementation deliberately does not claim UID ownership validation.
+- Remaining risk: no Unit 2/3 use case, MCP tool, catalog behavior, audit, radiography, planning, or `VerifyOutcome` wiring is implemented.
+- Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, shared phase protocol, and OpenSpec convention.
