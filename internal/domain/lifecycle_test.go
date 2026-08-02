@@ -80,3 +80,15 @@ func TestLifecycleProvenanceRequiresEveryField(t *testing.T) {
 		})
 	}
 }
+
+func TestIdempotencyReplayStateContract(t *testing.T) {
+	if IdempotencyAvailable != "available" {
+		t.Fatalf("available replay state = %q", IdempotencyAvailable)
+	}
+	if IdempotencyLegacyUnavailable != "legacy_unavailable" {
+		t.Fatalf("legacy-unavailable replay state = %q", IdempotencyLegacyUnavailable)
+	}
+	if ErrLegacyIdempotencyReplayUnavailable.Error() != "legacy_idempotency_replay_unavailable" {
+		t.Fatalf("legacy replay error = %q", ErrLegacyIdempotencyReplayUnavailable)
+	}
+}

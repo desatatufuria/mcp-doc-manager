@@ -6,9 +6,17 @@ import (
 )
 
 var (
-	ErrLifecycle                = errors.New("lifecycle_failure")
-	ErrAuthorizationInvalidated = errors.New("authorization_invalidated")
-	ErrIdempotencyConflict      = errors.New("idempotency_conflict")
+	ErrLifecycle                          = errors.New("lifecycle_failure")
+	ErrAuthorizationInvalidated           = errors.New("authorization_invalidated")
+	ErrIdempotencyConflict                = errors.New("idempotency_conflict")
+	ErrLegacyIdempotencyReplayUnavailable = errors.New("legacy_idempotency_replay_unavailable")
+)
+
+type IdempotencyReplayState string
+
+const (
+	IdempotencyAvailable         IdempotencyReplayState = "available"
+	IdempotencyLegacyUnavailable IdempotencyReplayState = "legacy_unavailable"
 )
 
 type LifecycleState string

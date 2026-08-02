@@ -243,6 +243,7 @@ func TestLifecycleMigratesCompleteHistoricalV1(t *testing.T) {
 type v1Snapshot struct {
 	schema map[string]string
 	rows   map[string][]string
+	counts map[string]int
 }
 
 func snapshotV1(t *testing.T, db *sql.DB) v1Snapshot {
@@ -301,4 +302,108 @@ func TestLifecycleV2MigrationRollsBackHistoricalSchemaAndData(t *testing.T) {
 	if after := snapshotV1(t, db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("migration rollback changed v1 snapshot: got %#v want %#v", after, before)
 	}
+}
+
+func TestLifecycleRefusesEveryMigratedLegacyKeyWithoutMutation(t *testing.T) {
+	root := t.TempDir()
+	db := createHistoricalV1(t, root)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	l, err := OpenLifecycle(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+
+	before := snapshotV2(t, l.db)
+	matchingA := provenance("input-a")
+	matchingA.IdempotencyKey = "legacy-key-a"
+	matchingB := provenance("input-b")
+	matchingB.IdempotencyKey = "legacy-key-b"
+	for _, tt := range []struct {
+		name string
+		key  string
+		p    domain.Provenance
+	}{
+		{"matching provenance", "legacy-key-a", matchingA},
+		{"repeated matching provenance", "legacy-key-a", matchingA},
+		{"every migrated key", "legacy-key-b", matchingB},
+		{"malformed provenance", "legacy-key-b", domain.Provenance{}},
+		{"mismatched provenance key", "legacy-key-b", provenance("input-b")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := l.Save(context.Background(), tt.key, "new-result", tt.p); got != "" || !errors.Is(err, domain.ErrLegacyIdempotencyReplayUnavailable) {
+				t.Fatalf("Save() = %q, %v", got, err)
+			}
+			if after := snapshotV2(t, l.db); !reflect.DeepEqual(after, before) {
+				t.Fatalf("legacy refusal mutated database: got %#v want %#v", after, before)
+			}
+		})
+	}
+}
+
+func TestLifecycleReplaysAvailableV2KeyExactlyOnce(t *testing.T) {
+	l, err := OpenLifecycle(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	p := provenance("v2-input")
+	p.IdempotencyKey = "v2-key"
+	first, err := l.Save(context.Background(), "v2-key", "v2-result", p)
+	if err != nil || first != "v2-result" {
+		t.Fatalf("first Save() = %q, %v", first, err)
+	}
+	before := snapshotV2(t, l.db)
+	replay, err := l.Save(context.Background(), "v2-key", "ignored-result", p)
+	if err != nil || replay != first {
+		t.Fatalf("replay Save() = %q, %v", replay, err)
+	}
+	if after := snapshotV2(t, l.db); !reflect.DeepEqual(after, before) {
+		t.Fatalf("available replay changed database: got %#v want %#v", after, before)
+	}
+	var recordID sql.NullInt64
+	var state string
+	if err := l.db.QueryRow(`SELECT record_id,replay_state FROM idempotency WHERE key='v2-key'`).Scan(&recordID, &state); err != nil || !recordID.Valid || state != string(domain.IdempotencyAvailable) {
+		t.Fatalf("v2 idempotency link/state = %v/%q, %v", recordID, state, err)
+	}
+}
+
+func snapshotV2(t *testing.T, db *sql.DB) v1Snapshot {
+	t.Helper()
+	s := v1Snapshot{schema: map[string]string{}, rows: map[string][]string{}, counts: map[string]int{}}
+	for table, query := range map[string]string{
+		"schema_migrations": `SELECT quote(version) FROM schema_migrations ORDER BY version`,
+		"lifecycle_records": `SELECT quote(id)||'|'||quote(state) FROM lifecycle_records ORDER BY id`,
+		"provenance":        `SELECT quote(record_id)||'|'||quote(authority)||'|'||quote(actor)||'|'||quote(interaction)||'|'||quote(context)||'|'||quote(operation)||'|'||quote(request)||'|'||quote(idempotency_key)||'|'||quote(time)||'|'||quote(approval)||'|'||quote(evidence)||'|'||quote(input)||'|'||quote(result)||'|'||quote(versions) FROM provenance ORDER BY record_id`,
+		"idempotency":       `SELECT quote(key)||'|'||quote(input)||'|'||quote(identity)||'|'||quote(result)||'|'||quote(record_id)||'|'||quote(replay_state) FROM idempotency ORDER BY key`,
+	} {
+		var schema string
+		if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&schema); err != nil {
+			t.Fatal(err)
+		}
+		s.schema[table] = schema
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		s.counts[table] = count
+		rows, err := db.Query(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for rows.Next() {
+			var row string
+			if err := rows.Scan(&row); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			s.rows[table] = append(s.rows[table], row)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
 }

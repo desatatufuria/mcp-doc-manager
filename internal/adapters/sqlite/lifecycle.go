@@ -158,7 +158,18 @@ func identity(p domain.Provenance) string {
 	return fmt.Sprintf("%d:%s%d:%s%d:%s%d:%s%d:%s%d:%s%d:%s", len(p.Operation), p.Operation, len(p.Request), p.Request, len(p.Input), p.Input, len(p.Approval), p.Approval, len(p.Evidence), p.Evidence, len(p.Versions), p.Versions, len(p.Context), p.Context)
 }
 func (l *Lifecycle) Save(ctx context.Context, key, result string, p domain.Provenance) (string, error) {
-	if l == nil || l.db == nil || key == "" || key != p.IdempotencyKey || result == "" || p.Validate() != nil {
+	if l == nil || l.db == nil || key == "" {
+		return "", domain.ErrLifecycle
+	}
+	var replayState domain.IdempotencyReplayState
+	err := l.db.QueryRowContext(ctx, "SELECT replay_state FROM idempotency WHERE key=?", key).Scan(&replayState)
+	if err == nil && replayState == domain.IdempotencyLegacyUnavailable {
+		return "", domain.ErrLegacyIdempotencyReplayUnavailable
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", domain.ErrLifecycle
+	}
+	if key != p.IdempotencyKey || result == "" || p.Validate() != nil {
 		return "", domain.ErrLifecycle
 	}
 	c, err := l.db.Conn(ctx)
@@ -203,7 +214,7 @@ func (l *Lifecycle) Save(ctx context.Context, key, result string, p domain.Prove
 	if _, err = c.ExecContext(ctx, `INSERT INTO provenance VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, newRecordID, p.Authority, p.DeclaredActor, p.Interaction, p.Context, p.Operation, p.Request, p.IdempotencyKey, p.Time, p.Approval, p.Evidence, p.Input, p.Result, p.Versions); err != nil {
 		return "", domain.ErrLifecycle
 	}
-	if _, err = c.ExecContext(ctx, "INSERT INTO idempotency VALUES(?,?,?,?,?,?)", key, p.Input, id, result, newRecordID, "available"); err != nil {
+	if _, err = c.ExecContext(ctx, "INSERT INTO idempotency VALUES(?,?,?,?,?,?)", key, p.Input, id, result, newRecordID, domain.IdempotencyAvailable); err != nil {
 		return "", domain.ErrLifecycle
 	}
 	if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {

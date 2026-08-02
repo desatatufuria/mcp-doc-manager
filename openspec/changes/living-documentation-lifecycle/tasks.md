@@ -53,10 +53,10 @@ Feature-chain: tracker→PR #3→PR #4→PR 1c→PR 1d→Unit 2; only tracker me
 
 ## PR 1d: Replay Integrity
 
-- [ ] 1.13 RED: domain/SQLite lifecycle tests require typed `IdempotencyReplayState` (`available`, `legacy_unavailable`) and every migrated-key refusal before validation, transaction, execution, or audit mutation.
-- [ ] 1.14 RED: prove a new-v2 `available` key returns its exact replay; migrated refusals leave records and audit unchanged.
-- [ ] 1.15 GREEN: `internal/domain/lifecycle.go` and `internal/adapters/sqlite/lifecycle.go` use typed state/error and pre-validation, pre-`BEGIN IMMEDIATE` legacy lookup/refusal.
-- [ ] 1.16 Evidence: cumulative focused/runtime/full/check-only results; truthful exact Git accounting and complete cross-slice rollback proof/boundary.
+- [x] 1.13 RED: domain/SQLite lifecycle tests require typed `IdempotencyReplayState` (`available`, `legacy_unavailable`) and every migrated-key refusal before validation, transaction, execution, or audit mutation.
+- [x] 1.14 RED: prove a new-v2 `available` key returns its exact replay; migrated refusals leave records and audit unchanged.
+- [x] 1.15 GREEN: `internal/domain/lifecycle.go` and `internal/adapters/sqlite/lifecycle.go` use typed state/error and pre-validation, pre-`BEGIN IMMEDIATE` legacy lookup/refusal.
+- [x] 1.16 Evidence: cumulative focused/runtime/full/check-only results; truthful exact Git accounting and complete cross-slice rollback proof/boundary.
 
 ## Unit 2
 

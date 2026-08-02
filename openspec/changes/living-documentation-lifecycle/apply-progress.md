@@ -118,6 +118,45 @@ Identities match before and after the bounded verification set.
 - [ ] 2.1–2.6 Radiography, planning, approvals, and staged MCP operations.
 - [ ] 3.1–3.5 Catalog, audit, verification, and final integration evidence.
 
+## PR 1d Replay Integrity (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed.
+- Runtime acquire token: `sha256:12a3860a88530930f0871019c771528ac73e00463ebb99341cc2d31d48d2cee4` (parent-owned; no reset, acquisition, or settlement was performed).
+- Work unit: `unit-1d-legacy-replay-integrity`; maximum actor delta: 350 lines.
+- Diagnosis: migrated legacy keys are refused by a typed domain error before provenance validation and `BEGIN IMMEDIATE`; fresh v2 keys retain exact non-mutating replay.
+- Harness disposition: reused; no process was started.
+- Cleanup evidence: SQLite workspaces are test-owned `t.TempDir()` resources; no durable test state was created.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|---|
+| 1.13 | `internal/domain/lifecycle_test.go`, `internal/adapters/sqlite/lifecycle_test.go` | Unit + integration | `go test ./internal/domain ./internal/adapters/sqlite` — exit 0; 2 packages | focused command — exit 1; undefined typed state/error symbols | focused command — exit 0; domain 1 test, SQLite 2 tests | both typed states; both migrated keys; repeated, malformed, and mismatched provenance | gofmt; focused command exit 0 |
+| 1.14 | `internal/adapters/sqlite/lifecycle_test.go` | Integration | same 2-package baseline | same missing-symbol RED gate | focused command — exit 0; exact v2 result, non-null record link, available state, no replay mutation | legacy refusal snapshots tables/schemas/counts/values/version; v2 replay snapshot | snapshot helper; lifecycle suite exit 0 |
+| 1.15 | `internal/domain/lifecycle.go`, `internal/adapters/sqlite/lifecycle.go` | Integration | same 2-package baseline | same missing-symbol RED gate | focused command — exit 0 | valid v2 replay and divergent existing behavior remain covered by lifecycle suite | gofmt; lifecycle suite exit 0 |
+| 1.16 | OpenSpec artifacts | Evidence | N/A | N/A | verification/accounting below | N/A | N/A |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/domain ./internal/adapters/sqlite -run 'Test(IdempotencyReplayStateContract|LifecycleRefusesEveryMigratedLegacyKeyWithoutMutation|LifecycleReplaysAvailableV2KeyExactlyOnce)' -count=1 -v` — exit 0; 1 domain test and 2 SQLite tests passed; legacy test ran 5 refusal cases. |
+| Runtime harness | `go test ./internal/adapters/sqlite -run Lifecycle -count=1 -v` — exit 0; 8 lifecycle tests passed, including migrated v1 fixture refusal/replay paths. |
+| Domain/SQLite | `go test ./internal/domain ./internal/adapters/sqlite` — exit 0; 2 packages passed. |
+| Full suite | `go test ./...` — exit 0; 9 tested packages passed; `assets` had no test files. |
+| Check-only | `gofmt -l internal/domain/lifecycle.go internal/domain/lifecycle_test.go internal/adapters/sqlite/lifecycle.go internal/adapters/sqlite/lifecycle_test.go` — exit 0/no output; `git diff --check` — exit 0/no output. |
+| Rollback boundary | Revert only PR 1d changes in `internal/domain/lifecycle.go`, `internal/domain/lifecycle_test.go`, `internal/adapters/sqlite/lifecycle.go`, `internal/adapters/sqlite/lifecycle_test.go`, and this unit's `tasks.md`/cumulative `apply-progress.md` updates. This removes typed replay refusal and its proof, while preserving PR 1c's migration/rollback foundation and leaving Units 2/3 untouched. |
+
+### Delivery and Remaining Scope
+
+- Chain: feature-branch-chain; PR 1d targets `fix/living-documentation-lifecycle-01c-v1-v2-migration`, never `develop`.
+- Boundary: typed replay-state/error contract, pre-validation/pre-transaction legacy refusal, and v2 replay proof only.
+- Git accounting against PR 1c base `a467731`: 184 additions + 9 deletions = 193 changed lines (`13/2` SQLite adapter, `105/0` SQLite tests, `11/3` domain, `12/0` domain tests, `39/0` progress, `4/4` tasks); within the 350-line actor delta and 400-line PR ceilings.
+- No size exception. Units 2 and 3 remain pending; this is not verification of the entire SDD change.
+- Skill resolution: direct executor reads of `sdd-apply`, `strict-tdd`, `go-testing`, `work-unit-commits`, and `chained-pr`; CodeGraph was unavailable because this worktree is unindexed.
+
 ## PR 1c v1→v2 Migration (Strict TDD)
 - Result Contract: outcome passed; native token `sha256:fab48346d46330902677709d44a18105275f32c23e5921170709d58868ec1bfe` is parent-settled only.
 - Scope: migration foundation only; no production RED occurred. PR 1c is publishable only as a chained review slice, not mergeable/deployable to `develop`; PR 1d replay integrity remains required and unchecked.
