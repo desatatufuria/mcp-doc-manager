@@ -137,17 +137,22 @@ func TestBootstrapFromStdinUsesReleaseURLsAndFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name     string
-		version  string
-		wantURLs []string
+		name          string
+		version       string
+		effectiveBase string
+		wantFailure   string
+		wantURLs      []string
 	}{
-		{name: "latest", wantURLs: []string{
+		{name: "latest", effectiveBase: "https://release-assets.githubusercontent.com/github-production-release-asset", wantFailure: "manifest signature verification failed", wantURLs: []string{
 			"https://github.com/desatatufuria/mcp-doc-manager/releases/latest/download/manifest.json",
 			"https://github.com/desatatufuria/mcp-doc-manager/releases/latest/download/manifest.sig",
 		}},
-		{name: "explicit version", version: "v1.2.3", wantURLs: []string{
+		{name: "explicit version", version: "v1.2.3", effectiveBase: "https://release-assets.githubusercontent.com/github-production-release-asset", wantFailure: "manifest signature verification failed", wantURLs: []string{
 			"https://github.com/desatatufuria/mcp-doc-manager/releases/download/v1.2.3/manifest.json",
 			"https://github.com/desatatufuria/mcp-doc-manager/releases/download/v1.2.3/manifest.sig",
+		}},
+		{name: "untrusted effective URL", effectiveBase: "https://release-assets.githubusercontent.com.example.com/github-production-release-asset", wantFailure: "unable to fetch trusted manifest", wantURLs: []string{
+			"https://github.com/desatatufuria/mcp-doc-manager/releases/latest/download/manifest.json",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,7 +161,7 @@ func TestBootstrapFromStdinUsesReleaseURLsAndFailsClosed(t *testing.T) {
 			if err := os.Mkdir(bin, 0o700); err != nil {
 				t.Fatal(err)
 			}
-			fakeCurl := "#!/bin/sh\noutput=\nurl=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in --output) shift; output=$1 ;; esac\n  url=$1\n  shift\ndone\nprintf x > \"$output\"\nprintf '%s\\n' \"$url\" >> \"$DOCMANAGER_TEST_URL_LOG\"\nprintf '%s' \"$url\"\n"
+			fakeCurl := "#!/bin/sh\noutput=\nurl=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in --output) shift; output=$1 ;; esac\n  url=$1\n  shift\ndone\nprintf x > \"$output\"\nprintf '%s\\n' \"$url\" >> \"$DOCMANAGER_TEST_URL_LOG\"\nprintf '%s/%s' \"$DOCMANAGER_TEST_EFFECTIVE_BASE\" \"${url##*/}\"\n"
 			if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(fakeCurl), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -171,12 +176,13 @@ func TestBootstrapFromStdinUsesReleaseURLsAndFailsClosed(t *testing.T) {
 				"DOCMANAGER_OS=linux",
 				"DOCMANAGER_ARCH=amd64",
 				"DOCMANAGER_TEST_URL_LOG="+urlLog,
+				"DOCMANAGER_TEST_EFFECTIVE_BASE="+tc.effectiveBase,
 			)
 			if tc.version != "" {
 				command.Env = append(command.Env, "DOCMANAGER_VERSION="+tc.version)
 			}
 			output, err := command.CombinedOutput()
-			if err == nil || !strings.Contains(string(output), "manifest signature verification failed") {
+			if err == nil || !strings.Contains(string(output), tc.wantFailure) {
 				t.Fatalf("bootstrap failure = %v, output=%q", err, output)
 			}
 			requested, err := os.ReadFile(urlLog)
@@ -200,7 +206,7 @@ func TestBootstrapInstallsExecutableFixture(t *testing.T) {
 	tmp := t.TempDir()
 	archiveRaw := archive(t, tarEntry{name: "docmanager", body: "#!/bin/sh\nprintf 'fixture executed\\n'\n"})
 	digest := sha256.Sum256(archiveRaw)
-	artifactURL := "https://github.com/desatatufuria/mcp-doc-manager/releases/download/v1.2.3/docmanager_v1.2.3_linux_amd64.tar.gz"
+	artifactURL := "https://release-assets.githubusercontent.com/github-production-release-asset/docmanager_v1.2.3_linux_amd64.tar.gz"
 	manifest, err := json.Marshal(map[string]any{
 		"schema":  1,
 		"key_id":  "docmanager-2026-01",
