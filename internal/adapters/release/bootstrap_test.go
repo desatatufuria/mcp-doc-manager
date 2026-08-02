@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -255,8 +256,13 @@ func TestBootstrapInstallsExecutableFixture(t *testing.T) {
 	fakeCurl := `#!/bin/sh
 output=
 url=
+progress=false
+printf '%s\n' "$*" >> "$DOCMANAGER_TEST_CURL_LOG"
 while [ "$#" -gt 0 ]; do
-  case "$1" in --output) shift; output=$1 ;; esac
+  case "$1" in
+    --output) shift; output=$1 ;;
+    --progress-bar) progress=true ;;
+  esac
   url=$1
   shift
 done
@@ -267,6 +273,9 @@ case "$url" in
   *) exit 1 ;;
 esac
 cp "$source" "$output"
+if [ "$progress" = true ]; then
+  printf 'fixture progress\n' >&2
+fi
 printf '%s' "$url"
 `
 	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(fakeCurl), 0o700); err != nil {
@@ -276,27 +285,78 @@ printf '%s' "$url"
 		t.Fatal(err)
 	}
 
-	installDir := filepath.Join(tmp, "install")
-	command := exec.Command("sh", "-s")
-	command.Dir = tmp
-	command.Stdin = strings.NewReader(string(script))
-	command.Env = append(withoutDocmanagerEnv(os.Environ()),
-		"PATH="+bin+":"+os.Getenv("PATH"),
-		"DOCMANAGER_VERSION=v1.2.3",
-		"DOCMANAGER_INSTALL_DIR="+installDir,
-		"DOCMANAGER_OS=linux",
-		"DOCMANAGER_ARCH=amd64",
-		"DOCMANAGER_TEST_MANIFEST="+manifestPath,
-		"DOCMANAGER_TEST_SIGNATURE="+signaturePath,
-		"DOCMANAGER_TEST_ARCHIVE="+archivePath,
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("bootstrap fixture failed: %v, output=%q", err, output)
-	}
-	installed := filepath.Join(installDir, "docmanager")
-	output, err := exec.Command(installed).CombinedOutput()
-	if err != nil || string(output) != "fixture executed\n" {
-		t.Fatalf("installed fixture execution = %q, %v", output, err)
+	for _, tc := range []struct {
+		name         string
+		interactive  bool
+		wantProgress bool
+	}{
+		{name: "noninteractive"},
+		{name: "interactive archive", interactive: true, wantProgress: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installDir := filepath.Join(tmp, "install-"+strings.ReplaceAll(tc.name, " ", "-"))
+			curlLog := filepath.Join(tmp, "curl-"+strings.ReplaceAll(tc.name, " ", "-")+".log")
+			var command *exec.Cmd
+			if tc.interactive {
+				if runtime.GOOS != "linux" {
+					t.Skip("util-linux script invocation is Linux-specific")
+				}
+				if _, err := exec.LookPath("script"); err != nil {
+					t.Skip("script is required for pseudo-terminal coverage")
+				}
+				command = exec.Command("script", "-qec", "sh -s", "/dev/null")
+			} else {
+				command = exec.Command("sh", "-s")
+			}
+			command.Dir = tmp
+			command.Stdin = strings.NewReader(string(script))
+			command.Env = append(withoutDocmanagerEnv(os.Environ()),
+				"PATH="+bin+":"+os.Getenv("PATH"),
+				"DOCMANAGER_VERSION=v1.2.3",
+				"DOCMANAGER_INSTALL_DIR="+installDir,
+				"DOCMANAGER_OS=linux",
+				"DOCMANAGER_ARCH=amd64",
+				"DOCMANAGER_TEST_MANIFEST="+manifestPath,
+				"DOCMANAGER_TEST_SIGNATURE="+signaturePath,
+				"DOCMANAGER_TEST_ARCHIVE="+archivePath,
+				"DOCMANAGER_TEST_CURL_LOG="+curlLog,
+			)
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("bootstrap fixture failed: %v, output=%q", err, output)
+			}
+			if gotProgress := strings.Contains(string(output), "fixture progress"); gotProgress != tc.wantProgress {
+				t.Fatalf("progress output present = %v, want %v; output=%q", gotProgress, tc.wantProgress, output)
+			}
+
+			callsRaw, err := os.ReadFile(curlLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := strings.Split(strings.TrimSpace(string(callsRaw)), "\n")
+			if len(calls) != 3 {
+				t.Fatalf("curl calls = %q, want manifest, signature, and archive", calls)
+			}
+			for _, call := range calls[:2] {
+				if !strings.Contains(call, "--silent") || strings.Contains(call, "--progress-bar") {
+					t.Fatalf("metadata curl call is not quiet: %q", call)
+				}
+			}
+			archiveCall := calls[2]
+			if tc.wantProgress {
+				if !strings.Contains(archiveCall, "--progress-bar") || strings.Contains(archiveCall, "--silent") {
+					t.Fatalf("interactive archive curl call does not use progress bar: %q", archiveCall)
+				}
+			} else if !strings.Contains(archiveCall, "--silent") || strings.Contains(archiveCall, "--progress-bar") {
+				t.Fatalf("noninteractive archive curl call is not quiet: %q", archiveCall)
+			}
+
+			installed := filepath.Join(installDir, "docmanager")
+			executed, err := exec.Command(installed).CombinedOutput()
+			if err != nil || string(executed) != "fixture executed\n" {
+				t.Fatalf("installed fixture execution = %q, %v", executed, err)
+			}
+		})
 	}
 }
 

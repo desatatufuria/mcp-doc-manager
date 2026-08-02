@@ -42,7 +42,11 @@ download() {
   destination=$1
   url=$2
   max_size=$3
-  effective=$(curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-filesize "$max_size" --output "$destination" --write-out '%{url_effective}' "$url") || return 1
+  curl_display=--silent
+  if [ "${4:-}" = progress ] && [ -t 2 ]; then
+    curl_display=--progress-bar
+  fi
+  effective=$(curl --fail "$curl_display" --show-error --location --proto '=https' --proto-redir '=https' --max-filesize "$max_size" --output "$destination" --write-out '%{url_effective}' "$url") || return 1
   case "$effective" in https://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*) ;; *) return 1 ;; esac
   test -s "$destination"
 }
@@ -81,7 +85,7 @@ artifact_size=$(printf '%s\n' "$read_artifact" | sed -n '2p')
 artifact_sha=$(printf '%s\n' "$read_artifact" | sed -n '3p')
 test -n "$artifact_url" && test -n "$artifact_size" && test -n "$artifact_sha" || { printf '%s\n' 'manifest does not authorize this platform' >&2; exit 1; }
 case "$artifact_url" in https://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*) ;; *) printf '%s\n' 'artifact URL is not allowlisted HTTPS' >&2; exit 1 ;; esac
-download "$tmp/archive.tar.gz" "$artifact_url" "$artifact_size" || { printf '%s\n' 'unable to fetch authorized archive' >&2; exit 1; }
+download "$tmp/archive.tar.gz" "$artifact_url" "$artifact_size" progress || { printf '%s\n' 'unable to fetch authorized archive' >&2; exit 1; }
 test "$(wc -c < "$tmp/archive.tar.gz" | tr -d ' ')" = "$artifact_size" && test "$(sha256 "$tmp/archive.tar.gz")" = "$artifact_sha" || { printf '%s\n' 'artifact digest verification failed' >&2; exit 1; }
 tar -xzf "$tmp/archive.tar.gz" -C "$tmp" docmanager || { printf '%s\n' 'archive is invalid' >&2; exit 1; }
 test -f "$tmp/docmanager" && test ! -L "$tmp/docmanager" || { printf '%s\n' 'archive binary is unsafe' >&2; exit 1; }
