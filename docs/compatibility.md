@@ -1,19 +1,19 @@
 # Compatibility and Workspace Lifecycle
 
-Use the `workspace` hierarchy for repository-local lifecycle state. It is the current CLI surface; legacy aliases remain only for one major-version compatibility window.
+Use top-level `install` for guided OpenCode onboarding. The `workspace` hierarchy remains the low-level repository lifecycle surface; `doctor` and `uninstall` remain compatibility aliases.
 
 ## Workspace commands and aliases
 
 | Current command | Compatibility alias | Behavior |
 | --- | --- | --- |
-| `workspace install --target /repo` | `install --target /repo` | Creates only owned repository-local state. |
+| `workspace install --target /repo` | none | Creates only owned repository-local state and initializes its ledger. |
 | `workspace doctor --target /repo` | `doctor --target /repo` | Read-only validation. |
 | `workspace uninstall --target /repo` | `uninstall --target /repo` | Removes only matching owned state. |
 | `workspace status --target /repo --json` | none | Reports workspace and hook state. |
 
-Aliases print a deprecation notice only in human output. With `--json`, they return the normal result without extra deprecation text.
+The `doctor` and `uninstall` aliases print a deprecation notice only in human output. With `--json`, they return the normal result without extra deprecation text. Top-level `install` is not an alias: it detects and configures OpenCode after repository initialization.
 
-The target must be the exact Git root. `workspace install`, `workspace uninstall`, and aliases accept `--dry-run` to plan without writing; all resource commands accept `--json` for machine-readable results. Inspection commands (`status` and `doctor`) are read-only and do not accept `--dry-run`.
+The target must be the exact Git root. Guided `install --json` requires `--yes` or `--dry-run` so it never prompts. `workspace install`, `workspace uninstall`, and compatibility aliases accept `--dry-run` to plan without writing; inspection commands (`status` and `doctor`) are read-only and do not accept `--dry-run`.
 
 ## Hooks require explicit consent
 

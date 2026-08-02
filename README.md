@@ -6,7 +6,8 @@
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/desatatufuria/mcp-doc-manager/main/scripts/install.sh | sh
-"$HOME/.local/bin/docmanager" document-change --repo /absolute/path/to/repository --scope staged
+cd /absolute/path/to/repository
+docmanager install
 ```
 
 This tokenless command works after the GitHub repository is public and at least one release exists. The installer embeds its public trust root, verifies the latest release's signed manifest, and installs only Linux/macOS amd64/arm64 release archives. For a reproducible install, pin a published tag:
@@ -49,10 +50,11 @@ Verification accepts only the exact, successful analysis whose selected Git cont
 | `docmanager verify ...` | Recheck a content-bound receipt without an LLM or repository mutation. |
 | `docmanager mcp` | Start the stdio MCP server. |
 | `docmanager mcp --version` | Print the installed version without starting MCP. |
-| `docmanager workspace install --target /repo` | Install owned local guidance; add a hook only with `--enable-hook`. |
+| `docmanager install [--target /repo] [--agent opencode] [--yes]` | Initialize the exact Git root and configure the detected OpenCode MCP entry. |
+| `docmanager workspace install --target /repo` | Low-level repository initialization; add a hook only with `--enable-hook`. |
 | `docmanager workspace doctor --target /repo` | Validate Git and owned local assets without changing them. |
 | `docmanager workspace uninstall --target /repo` | Remove only owned `.docmanager/` state. |
-| `docmanager install|doctor|uninstall --target /repo` | Deprecated human-output aliases for the matching workspace operation for one major version. |
+| `docmanager doctor|uninstall --target /repo` | Compatibility aliases for the matching workspace operation. |
 
 ## Read-only MCP
 
@@ -67,7 +69,7 @@ MCP does not expose install, uninstall, patch, commit, or documentation-write to
 
 ## Lifecycle and pre-push receipts
 
-`install` creates an owned `.docmanager/` directory containing embedded `AGENTS.md`, skill guidance, and declarative pre-push configuration. It refuses symlinked, unowned, or altered state. `doctor` is read-only; `uninstall` removes only state carrying the ownership marker.
+`install` guides OpenCode onboarding: it initializes the owned `.docmanager/` directory and SQLite ledger, then adds the local MCP entry to OpenCode. It refuses symlinked, unowned, altered, or conflicting state. The pre-push hook remains disabled unless `--enable-hook` is explicit. `doctor` is read-only; `uninstall` removes only repository state carrying the ownership marker and does not unconfigure OpenCode.
 
 The installed pre-push configuration invokes `docmanager hook-verify`. It reads normal Git pre-push update records, resolves each non-deletion update, and requires a stored receipt that exactly verifies current content. The embedded default is `warn`: ambiguous hook input warns, while a missing, stale, tampered, or mismatched receipt fails verification. Use `--mode fail` only when your team intends to enforce ambiguous-input failure as well.
 
@@ -87,7 +89,7 @@ git -C "$root" add README.md && git -C "$root" commit -m initial
 printf 'after\n' > "$root/README.md"
 git -C "$root" add README.md
 go build -o "$root/docmanager" ./cmd/docmanager
-"$root/docmanager" install --target "$root"
+"$root/docmanager" workspace install --target "$root"
 report="$("$root/docmanager" document-change --repo "$root" --scope staged)"
 printf '%s\n' "$report" | jq -e '.Outcome == "update" and (.Receipt.digest? | type == "string" and length > 0)'
 receipt="$(printf '%s' "$report" | jq -c '.Receipt')"
@@ -104,7 +106,7 @@ test ! -e "$root/.docmanager"
 | `invalid_scope` | Supply exactly one supported scope; `range` also needs `--range`. |
 | `outside_repository` or `not_repository` | Use the exact Git root as `--repo` or `--target`. |
 | `receipt_mismatch` | Re-run the explicit analysis for the current selected content, then verify that new receipt. |
-| `ledger_failure` | Run `doctor`; remove only owned state with `uninstall`, then re-run analysis to rebuild the ledger. |
+| `ledger_failure` | Initialize the repository with `docmanager install` (or low-level `workspace install`) before analysis. |
 | Hook warns or fails | Ensure the pushed range has a matching stored receipt; use the hook's configured mode intentionally. |
 
 To remove local integration, run `docmanager uninstall --target /absolute/repository/root`. This removes owned `.docmanager/` cache, guidance, and hook configuration only. It does not modify repository documentation, Git history, or external MCP client configuration.
