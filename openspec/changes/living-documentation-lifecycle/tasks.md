@@ -27,10 +27,10 @@ Tracker: draft/no-merge; only it integrates to develop after children.
 
 ## Phase 1: Domain and Persistence (Unit 1)
 
-- [ ] 1.1 RED: in `internal/domain/lifecycle_test.go`, test transitions, no-wall-clock evidence-bound invalidation (completion/plan/policy/scope/baseline/evidence drift), local-actor provenance, and no-authentication claim.
-- [ ] 1.2 RED: in `internal/adapters/sqlite/lifecycle_test.go`, test owned DB, forward migrations, `BEGIN IMMEDIATE` rollback, provenance, identical-key replay, and divergent-key failure.
-- [ ] 1.3 GREEN: create `internal/domain/lifecycle.go` typed states, authorization bounds, planned actions, catalog/audit/verification records, and transition validation.
-- [ ] 1.4 GREEN: create `internal/adapters/sqlite/lifecycle.go` versioned `.docmanager/lifecycle.db`, atomic migrations/state/provenance/keys; retain `ledger.go` unchanged.
+- [x] 1.1 RED: in `internal/domain/lifecycle_test.go`, test transitions, no-wall-clock evidence-bound invalidation (completion/plan/policy/scope/baseline/evidence drift), local-actor provenance, and no-authentication claim.
+- [x] 1.2 RED: in `internal/adapters/sqlite/lifecycle_test.go`, test owned DB, forward migrations, `BEGIN IMMEDIATE` rollback, provenance, identical-key replay, and divergent-key failure.
+- [x] 1.3 GREEN: create `internal/domain/lifecycle.go` typed states, authorization bounds, planned actions, catalog/audit/verification records, and transition validation.
+- [x] 1.4 GREEN: create `internal/adapters/sqlite/lifecycle.go` versioned `.docmanager/lifecycle.db`, atomic migrations/state/provenance/keys; retain `ledger.go` unchanged.
 
 ## Phase 2: Radiography, Planning, and Approval (Unit 2)
 
