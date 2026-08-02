@@ -55,12 +55,12 @@ jobs:
         run: |
           repo="$(mktemp -d)"
           git -C "$repo" init
-          ./docmanager doctor --target "$repo"
-          ./docmanager install --target "$repo"
+          ./docmanager workspace doctor --target "$repo"
+          ./docmanager workspace install --target "$repo"
           test -f "$repo/.docmanager/.owned"
           test -f "$repo/.docmanager/guidance/AGENTS.md"
-          ./docmanager doctor --target "$repo"
-          ./docmanager uninstall --target "$repo"
+          ./docmanager workspace doctor --target "$repo"
+          ./docmanager workspace uninstall --target "$repo"
           test ! -e "$repo/.docmanager"
       - name: Smoke executable and embedded assets
         if: runner.os == 'Windows'
@@ -69,12 +69,12 @@ jobs:
           $repo = Join-Path $env:RUNNER_TEMP "docmanager-smoke"
           New-Item -ItemType Directory -Force $repo | Out-Null
           git -C $repo init
-          .\docmanager.exe doctor --target $repo
-          .\docmanager.exe install --target $repo
+          .\docmanager.exe workspace doctor --target $repo
+          .\docmanager.exe workspace install --target $repo
           if (!(Test-Path "$repo/.docmanager/.owned")) { throw "ownership marker missing" }
           if (!(Test-Path "$repo/.docmanager/guidance/AGENTS.md")) { throw "embedded agent guidance missing" }
-          .\docmanager.exe doctor --target $repo
-          .\docmanager.exe uninstall --target $repo
+          .\docmanager.exe workspace doctor --target $repo
+          .\docmanager.exe workspace uninstall --target $repo
           if (Test-Path "$repo/.docmanager") { throw "owned state was not removed" }
 
   cross-build:

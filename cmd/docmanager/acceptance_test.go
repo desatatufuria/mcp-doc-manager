@@ -222,6 +222,41 @@ func TestAcceptanceMacOSLexicalVarTargetMatchesPhysicalGitRoot(t *testing.T) {
 	}
 }
 
+func TestAcceptanceNativePackageSmokeUsesWorkspaceLifecycle(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(workflow)
+	for _, tc := range []struct {
+		invocation string
+		count      int
+	}{
+		{invocation: `./docmanager workspace doctor --target "$repo"`, count: 2},
+		{invocation: `./docmanager workspace install --target "$repo"`, count: 1},
+		{invocation: `./docmanager workspace uninstall --target "$repo"`, count: 1},
+		{invocation: `.\docmanager.exe workspace doctor --target $repo`, count: 2},
+		{invocation: `.\docmanager.exe workspace install --target $repo`, count: 1},
+		{invocation: `.\docmanager.exe workspace uninstall --target $repo`, count: 1},
+		{invocation: `test -f "$repo/.docmanager/.owned"`, count: 1},
+		{invocation: `test -f "$repo/.docmanager/guidance/AGENTS.md"`, count: 1},
+		{invocation: `Test-Path "$repo/.docmanager/.owned"`, count: 1},
+		{invocation: `Test-Path "$repo/.docmanager/guidance/AGENTS.md"`, count: 1},
+	} {
+		if got := strings.Count(text, tc.invocation); got != tc.count {
+			t.Errorf("native package smoke invocation %q count = %d, want %d", tc.invocation, got, tc.count)
+		}
+	}
+	for _, legacy := range []string{
+		`./docmanager install --target "$repo"`,
+		`.\docmanager.exe install --target $repo`,
+	} {
+		if strings.Contains(text, legacy) {
+			t.Errorf("native package smoke uses guided top-level install %q", legacy)
+		}
+	}
+}
+
 func TestAcceptanceWindowsSmokeBuildAndInvocationAgree(t *testing.T) {
 	workflow, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
@@ -231,7 +266,7 @@ func TestAcceptanceWindowsSmokeBuildAndInvocationAgree(t *testing.T) {
 	if !strings.Contains(text, "output: docmanager.exe") || !strings.Contains(text, "go build -o ${{ matrix.output }} ./cmd/docmanager") {
 		t.Fatal("Windows native package build must produce its matrix-selected docmanager.exe output")
 	}
-	if !strings.Contains(text, `.\docmanager.exe doctor --target $repo`) || !strings.Contains(text, `.\docmanager.exe uninstall --target $repo`) {
+	if !strings.Contains(text, `.\docmanager.exe workspace doctor --target $repo`) || !strings.Contains(text, `.\docmanager.exe workspace uninstall --target $repo`) {
 		t.Fatal("Windows native package smoke must invoke the executable it builds")
 	}
 	output := filepath.Join(t.TempDir(), "docmanager.exe")
