@@ -118,6 +118,23 @@ Identities match before and after the bounded verification set.
 - [ ] 2.1–2.6 Radiography, planning, approvals, and staged MCP operations.
 - [ ] 3.1–3.5 Catalog, audit, verification, and final integration evidence.
 
+## PR 1c v1→v2 Migration (Strict TDD)
+- Result Contract: outcome passed; native token `sha256:fab48346d46330902677709d44a18105275f32c23e5921170709d58868ec1bfe` is parent-settled only.
+- Scope: migration foundation only; no production RED occurred. PR 1c is publishable only as a chained review slice, not mergeable/deployable to `develop`; PR 1d replay integrity remains required and unchecked.
+| Task | Test file | Layer | Safety net | RED | GREEN | Triangulate | REFACTOR |
+|---|---|---|---|---|---|---|---|
+| 1.9 | `internal/adapters/sqlite/lifecycle_test.go` | Integration | `go test ./internal/adapters/sqlite -run Lifecycle -count=1 -v` exit 0; 6 tests | Inherited candidate behavior; new exact fixture assertions passed before code re-scope | focused migration test exit 0; 2 tests | two provenance/idempotency rows | snapshot helper |
+| 1.10 | same | Integration | same | Characterization: initial test build failure was test-only; production candidate passed after correction | focused migration test exit 0; 2 tests | all four schemas and every original row | snapshot helper |
+| 1.11 | `internal/adapters/sqlite/lifecycle.go` | Integration | same | Inherited transaction already green; no fabricated RED | lifecycle suite exit 0; 6 tests | fresh v2 and forced rollback paths | no further refactor |
+| 1.12 | artifacts | Evidence | N/A | N/A | full/check/accounting passed | N/A | N/A |
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/adapters/sqlite -run 'TestLifecycle(MigratesCompleteHistoricalV1\|V2MigrationRollsBackHistoricalSchemaAndData)' -count=1 -v` — exit 0; 2 tests passed. |
+| Runtime harness | `go test ./internal/adapters/sqlite -run Lifecycle -count=1 -v` — exit 0; exact v1 fixture→migration and injected rollback, 6 tests passed. |
+| Domain/SQLite and full | `go test ./internal/domain ./internal/adapters/sqlite`; `go test ./...` — exit 0; 2 packages, then 9 tested packages passed and `assets` had no test files. |
+| Check/accounting | `gofmt -d` touched SQLite files; `git diff --check` — exit 0/no output; base diff is 313 additions + 75 deletions = 388 lines. |
+| Rollback boundary | Revert only `internal/adapters/sqlite/lifecycle.go`, `internal/adapters/sqlite/lifecycle_test.go`, `openspec/changes/living-documentation-lifecycle/apply-progress.md`, `openspec/changes/living-documentation-lifecycle/design.md`, `openspec/changes/living-documentation-lifecycle/specs/documentation-catalog-lifecycle/spec.md`, and `openspec/changes/living-documentation-lifecycle/tasks.md`; no domain replay/error behavior or Unit 2/3 work. |
+
 ## Unit 1 Conformance-Correction (Strict TDD; attempt 1)
 
 This section supplements and preserves the original Unit 1 attempt and settlement evidence above; it does not settle this correction.
