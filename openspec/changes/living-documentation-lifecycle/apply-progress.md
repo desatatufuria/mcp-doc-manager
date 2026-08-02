@@ -33,7 +33,7 @@
 
 ## Delivery and Risk
 
-- Chain: feature-branch-chain; PR 1 base is `feature/living-documentation-lifecycle-tracker`.
+- Chain: feature-branch-chain; PR 1 base is `feat/living-documentation-lifecycle-tracker`; the tracker targets `develop`.
 - Boundary: Unit 1 only — typed domain lifecycle and `.docmanager/lifecycle.db`; Units 2 and 3 are untouched.
 - Changed-line accounting: 329 new Go lines + 8 task checkbox lines + 45 progress lines = 382 authored additions/deletions, within the 400-line ceiling.
 - Risks: `Lifecycle` is intentionally persistence-only; application/MCP integration remains for later units. `ledger.go` is unchanged.
