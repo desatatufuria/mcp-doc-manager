@@ -43,9 +43,12 @@ Verification accepts only the exact, successful analysis whose selected Git cont
 
 | Command | Purpose |
 | --- | --- |
+| `docmanager`, `docmanager help`, `docmanager --help` | Show concise CLI usage. |
+| `docmanager version`, `docmanager --version` | Print the installed version. |
 | `docmanager document-change ...` | Explicitly analyze one selected scope. |
 | `docmanager verify ...` | Recheck a content-bound receipt without an LLM or repository mutation. |
 | `docmanager mcp` | Start the stdio MCP server. |
+| `docmanager mcp --version` | Print the installed version without starting MCP. |
 | `docmanager workspace install --target /repo` | Install owned local guidance; add a hook only with `--enable-hook`. |
 | `docmanager workspace doctor --target /repo` | Validate Git and owned local assets without changing them. |
 | `docmanager workspace uninstall --target /repo` | Remove only owned `.docmanager/` state. |

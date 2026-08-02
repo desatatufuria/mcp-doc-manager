@@ -16,6 +16,21 @@ import (
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
+var version = "dev"
+
+const usage = `Usage: docmanager <command> [options]
+
+Commands:
+  help                 Show this help
+  version              Show the version
+  mcp                  Start the stdio MCP server
+  document-change      Analyze a selected Git scope
+  verify               Verify an analysis receipt
+  workspace            Manage repository-local integration
+  release              Manage releases
+  agent                Manage agent integration
+`
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, classify(err))
@@ -25,11 +40,31 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return domain.ErrUnsupportedRequest
+		fmt.Fprint(os.Stdout, usage)
+		return nil
 	}
 	switch args[0] {
+	case "help", "--help", "-h":
+		if len(args) != 1 {
+			return domain.ErrUnsupportedRequest
+		}
+		fmt.Fprint(os.Stdout, usage)
+		return nil
+	case "version", "--version":
+		if len(args) != 1 {
+			return domain.ErrUnsupportedRequest
+		}
+		fmt.Fprintf(os.Stdout, "docmanager %s\n", version)
+		return nil
 	case "mcp":
-		return mcpadapter.Serve(context.Background())
+		if len(args) == 1 {
+			return mcpadapter.Serve(context.Background())
+		}
+		if len(args) == 2 && args[1] == "--version" {
+			fmt.Fprintf(os.Stdout, "docmanager %s\n", version)
+			return nil
+		}
+		return domain.ErrUnsupportedRequest
 	case "hook-verify":
 		fs := flag.NewFlagSet("hook-verify", flag.ContinueOnError)
 		mode := fs.String("mode", "warn", "warn|fail")

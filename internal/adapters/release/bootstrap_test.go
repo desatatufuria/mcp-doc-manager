@@ -79,6 +79,18 @@ func TestReleaseWorkflowPublishesAllAssetsAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowInjectsExactTagVersion(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join("..", "..", "..", ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+
+	build := `go build -trimpath -buildvcs=false -ldflags="-s -w -X 'main.version=${version}'" -o docmanager ./cmd/docmanager`
+	if !strings.Contains(string(workflow), build) {
+		t.Fatal("release build must inject the exact tag into main.version while retaining deterministic and stripping flags")
+	}
+}
+
 func TestReleaseRepositoryTracksNoPrivateSigningMaterial(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
 	tracked, err := exec.Command("git", "-C", root, "ls-files", "-z").Output()

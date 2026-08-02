@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
@@ -40,6 +41,84 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+func TestCLIHelp(t *testing.T) {
+	want := "Usage: docmanager <command> [options]\n\nCommands:\n" +
+		"  help                 Show this help\n" +
+		"  version              Show the version\n" +
+		"  mcp                  Start the stdio MCP server\n" +
+		"  document-change      Analyze a selected Git scope\n" +
+		"  verify               Verify an analysis receipt\n" +
+		"  workspace            Manage repository-local integration\n" +
+		"  release              Manage releases\n" +
+		"  agent                Manage agent integration\n"
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "bare command"},
+		{name: "help command", args: []string{"help"}},
+		{name: "long help flag", args: []string{"--help"}},
+		{name: "short help flag", args: []string{"-h"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := runCLI(t, tc.args...)
+			if string(output) != want {
+				t.Fatalf("help output = %q, want %q", output, want)
+			}
+		})
+	}
+}
+
+func TestCLIVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "flag", args: []string{"--version"}},
+		{name: "command", args: []string{"version"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := runCLI(t, tc.args...)
+			if string(output) != "docmanager dev\n" {
+				t.Fatalf("docmanager %v output = %q", tc.args, output)
+			}
+		})
+	}
+}
+
+func TestCLIMCPVersionIsBounded(t *testing.T) {
+	command := docmanagerCommand("mcp", "--version")
+	type result struct {
+		output []byte
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		output, err := command.CombinedOutput()
+		done <- result{output: output, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil || string(got.output) != "docmanager dev\n" {
+			t.Fatalf("mcp --version = %v, %q", got.err, got.output)
+		}
+	case <-time.After(2 * time.Second):
+		if command.Process != nil {
+			_ = command.Process.Kill()
+		}
+		<-done
+		t.Fatal("mcp --version started the MCP server or hung")
+	}
+}
+
+func TestCLIUnknownCommandRemainsUnsupported(t *testing.T) {
+	output, err := runCLIError("not-a-command")
+	if err == nil || string(output) != "unsupported_request\n" {
+		t.Fatalf("unknown command = %v, %q", err, output)
+	}
 }
 
 func TestCLIDocumentChangeVerifyAndLifecycleWithoutDocumentationMutation(t *testing.T) {
