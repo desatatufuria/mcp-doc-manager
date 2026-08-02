@@ -7,7 +7,7 @@
 | Estimated changed lines | 1,050 |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
-| Suggested split | Draft tracker→main; PR 1 → PR 2 → PR 3 |
+| Suggested split | Draft tracker→develop; PR 1 → PR 2 → PR 3 |
 | Delivery strategy | ask-on-risk |
 | Chain strategy | feature-branch-chain |
 
@@ -15,7 +15,7 @@ Decision needed before apply: No
 Chained PRs recommended: Yes
 Chain strategy: feature-branch-chain
 400-line budget risk: High
-Tracker: draft/no-merge; only it integrates to main after children.
+Tracker: draft/no-merge; only it integrates to develop after children.
 
 ### Suggested Work Units
 
