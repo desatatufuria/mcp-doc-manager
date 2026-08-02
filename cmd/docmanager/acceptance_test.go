@@ -41,6 +41,79 @@ func TestAcceptanceHeadlessWorkspaceJSONDryRunStatusAndDoctor(t *testing.T) {
 	}
 }
 
+func TestAcceptanceGuidedInstallConfiguresOnlyOpenCode(t *testing.T) {
+	repo := t.TempDir()
+	cliGit(t, repo, "init")
+	xdgConfig := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	bin := t.TempDir()
+	opencode := filepath.Join(bin, "opencode")
+	writeCLI(t, opencode, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(opencode, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	output := runCLI(t, "install", "--target", repo, "--agent", "opencode", "--yes")
+	if !strings.Contains(string(output), "Repository initialized: "+repo) || !strings.Contains(string(output), "Verify with: opencode mcp list") {
+		t.Fatalf("guided success = %q", output)
+	}
+	configPath := filepath.Join(xdgConfig, "opencode", "opencode.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	entry := config["mcp"].(map[string]any)["docmanager"].(map[string]any)
+	command := entry["command"].([]any)
+	if len(entry) != 3 || entry["type"] != "local" || entry["enabled"] != true || len(command) != 2 || command[1] != "mcp" {
+		t.Fatalf("OpenCode entry = %#v", entry)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".docmanager", "ledger.db")); err != nil {
+		t.Fatalf("ledger = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".git", "hooks", "pre-push")); !os.IsNotExist(err) {
+		t.Fatalf("default hook = %v", err)
+	}
+	if output := runCLI(t, "install", "--target", repo, "--yes"); !strings.Contains(string(output), "OpenCode configured") {
+		t.Fatalf("idempotent guided install = %q", output)
+	}
+}
+
+func TestAcceptanceGuidedInstallConflictDoesNotInitializeRepository(t *testing.T) {
+	repo := t.TempDir()
+	cliGit(t, repo, "init")
+	xdgConfig := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	bin := t.TempDir()
+	opencode := filepath.Join(bin, "opencode")
+	writeCLI(t, opencode, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(opencode, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	config := filepath.Join(xdgConfig, "opencode", "opencode.json")
+	writeCLI(t, config, `{"mcp":{"docmanager":{"type":"local","command":["other","mcp"],"enabled":true}}}`)
+	before, _ := os.ReadFile(config)
+
+	output, err := runCLIError("install", "--target", repo, "--yes")
+	if err == nil || string(output) != "ownership\n" {
+		t.Fatalf("conflict = %v, %q", err, output)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".docmanager")); !os.IsNotExist(err) {
+		t.Fatalf("conflict initialized repository: %v", err)
+	}
+	after, _ := os.ReadFile(config)
+	if string(after) != string(before) {
+		t.Fatal("conflict changed OpenCode config")
+	}
+}
+
 func TestAcceptanceWorkspaceRejectsSymlinkTargetAndTraversal(t *testing.T) {
 	repo := t.TempDir()
 	cliGit(t, repo, "init")
@@ -66,7 +139,7 @@ func TestAcceptanceMCPReceiptAndSQLiteRemainReadOnly(t *testing.T) {
 	cliGit(t, repo, "init")
 	cliGit(t, repo, "config", "user.email", "test@example.com")
 	cliGit(t, repo, "config", "user.name", "Test")
-	runCLI(t, "install", "--target", repo)
+	runCLI(t, "workspace", "install", "--target", repo)
 	t.Cleanup(func() { runCLI(t, "uninstall", "--target", repo) })
 	writeCLI(t, filepath.Join(repo, "README.md"), "before\n")
 	cliGit(t, repo, "add", "README.md")

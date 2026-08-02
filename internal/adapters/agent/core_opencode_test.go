@@ -28,7 +28,7 @@ func TestOpenCodeRegistryFixturesAndDetection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := decodeConfig(data); err != nil {
+		if _, err := decodeOpenCodeConfig(data, filepath.Ext(name) == ".jsonc"); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
@@ -95,7 +95,7 @@ func TestOpenCodeConfigureStatusAndUnconfigureJSONC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(configured), "// preserved comment") || !strings.Contains(string(configured), `"docmanager"`) || !strings.Contains(string(configured), `"/opt/docmanager"`) || !strings.Contains(string(configured), `"mcp"`) || !strings.Contains(string(configured), managedGuidanceBegin) {
+	if !strings.Contains(string(configured), "// preserved comment") || !strings.Contains(string(configured), `"docmanager"`) || !strings.Contains(string(configured), `"/opt/docmanager"`) || !strings.Contains(string(configured), `"type": "local"`) || !strings.Contains(string(configured), `"enabled": true`) || strings.Contains(string(configured), `"_docmanager"`) || strings.Contains(string(configured), `"docmanager_guidance"`) {
 		t.Fatalf("configured JSONC did not preserve/add managed content: %s", configured)
 	}
 	after, err := a.Status(context.Background())
@@ -109,7 +109,7 @@ func TestOpenCodeConfigureStatusAndUnconfigureJSONC(t *testing.T) {
 		t.Fatal(err)
 	}
 	removed, _ := os.ReadFile(config)
-	if strings.Contains(string(removed), `"docmanager"`) || strings.Contains(string(removed), managedGuidanceBegin) || !strings.Contains(string(removed), `"other"`) || !strings.Contains(string(removed), "// preserved comment") {
+	if strings.Contains(string(removed), `"docmanager"`) || !strings.Contains(string(removed), `"other"`) || !strings.Contains(string(removed), "// preserved comment") {
 		t.Fatalf("unconfigure content = %s", removed)
 	}
 }
@@ -161,17 +161,17 @@ func TestOpenCodeRejectsUnsafeStatesWithoutWriting(t *testing.T) {
 func TestOpenCodeRejectsDriftAndProbeFailuresWithoutWriting(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "opencode.json")
-	writeAgentFile(t, config, `{"mcp":{"docmanager":{"command":["/old/docmanager","mcp"],"_docmanager":"managed/v1"}},"docmanager_guidance":"DOCMANAGER-MANAGED-GUIDANCE-v1"}`)
+	writeAgentFile(t, config, `{"mcp":{"docmanager":{"type":"local","command":["/old/docmanager","mcp"],"enabled":true}}}`)
 	a := NewOpenCode(OpenCodeOptions{Root: root, Binary: "/new/docmanager", Installed: func() bool { return true }})
 	before := snapshotAgent(t, root)
-	if err := a.Configure(context.Background()); !errors.Is(err, ErrDrift) {
+	if err := a.Configure(context.Background()); !errors.Is(err, ErrOwnership) {
 		t.Fatalf("drift = %v", err)
 	}
 	if after := snapshotAgent(t, root); after != before {
 		t.Fatal("drift wrote config")
 	}
 
-	writeAgentFile(t, config, `{"mcp":{"docmanager":{"command":["/bin/docmanager; echo nope","mcp"],"_docmanager":"managed/v1"}},"docmanager_guidance":"DOCMANAGER-MANAGED-GUIDANCE-v1"}`)
+	writeAgentFile(t, config, `{"mcp":{"docmanager":{"type":"local","command":["/bin/docmanager; echo nope","mcp"],"enabled":true}}}`)
 	before = snapshotAgent(t, root)
 	for _, run := range []func(context.Context, ...string) error{
 		func(context.Context, ...string) error { return errors.New("literal $HOME; must not execute shell") },
@@ -184,6 +184,87 @@ func TestOpenCodeRejectsDriftAndProbeFailuresWithoutWriting(t *testing.T) {
 		if after := snapshotAgent(t, root); after != before {
 			t.Fatal("probe wrote config")
 		}
+	}
+}
+
+func TestOpenCodeDefaultRoutePrecedenceAndJSONCSafety(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	root := filepath.Join(xdg, "opencode")
+	a := NewOpenCode(OpenCodeOptions{Binary: "/opt/docmanager", Installed: func() bool { return true }})
+	if _, err := a.Inspect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(root); !os.IsNotExist(err) {
+		t.Fatalf("read-only inspection created default route: %v", err)
+	}
+	if err := a.Configure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "opencode.json")); err != nil {
+		t.Fatalf("default XDG config = %v", err)
+	}
+
+	writeAgentFile(t, filepath.Join(root, "opencode.jsonc"), "// other file\n{}\n")
+	if err := a.Configure(context.Background()); err != nil {
+		t.Fatalf("JSON precedence should keep using opencode.json: %v", err)
+	}
+
+	for _, comment := range []string{"// nested", "/* nested */"} {
+		unsafeRoot := t.TempDir()
+		unsafe := filepath.Join(unsafeRoot, "opencode.jsonc")
+		writeAgentFile(t, unsafe, "// leading\n{\n  "+comment+"\n  \"mcp\": {}\n}\n")
+		before, _ := os.ReadFile(unsafe)
+		unsafeAgent := NewOpenCode(OpenCodeOptions{Root: unsafeRoot, Binary: "/opt/docmanager", Installed: func() bool { return true }})
+		if err := unsafeAgent.Configure(context.Background()); !errors.Is(err, ErrMalformedConfig) {
+			t.Fatalf("non-leading JSONC comment %q = %v", comment, err)
+		}
+		after, _ := os.ReadFile(unsafe)
+		if string(after) != string(before) {
+			t.Fatal("rejected JSONC was modified")
+		}
+	}
+}
+
+func TestOpenCodeExactSchemaConflictAndUnconfigure(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "opencode.json")
+	writeAgentFile(t, config, `{"theme":"dark","mcp":{"other":{"type":"local","command":["other"],"enabled":true}}}`)
+	a := NewOpenCode(OpenCodeOptions{Root: root, Binary: "/opt/docmanager", Installed: func() bool { return true }})
+	if err := a.Configure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(config)
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	entry := decoded["mcp"].(map[string]any)["docmanager"].(map[string]any)
+	if len(entry) != 3 || entry["type"] != "local" || entry["enabled"] != true || decoded["theme"] != "dark" {
+		t.Fatalf("configured schema = %#v", decoded)
+	}
+	if _, found := entry["_docmanager"]; found || decoded["docmanager_guidance"] != nil {
+		t.Fatalf("unsupported properties = %#v", decoded)
+	}
+	if err := a.Configure(context.Background()); err != nil {
+		t.Fatalf("idempotent configure: %v", err)
+	}
+	if err := a.Unconfigure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	data, _ = os.ReadFile(config)
+	if strings.Contains(string(data), `"docmanager"`) || !strings.Contains(string(data), `"other"`) || !strings.Contains(string(data), `"theme"`) {
+		t.Fatalf("exact unconfigure = %s", data)
+	}
+
+	writeAgentFile(t, config, `{"mcp":{"docmanager":{"type":"local","command":["/opt/docmanager","mcp"],"enabled":false}}}`)
+	before, _ := os.ReadFile(config)
+	if err := a.Configure(context.Background()); !errors.Is(err, ErrOwnership) {
+		t.Fatalf("different entry = %v", err)
+	}
+	after, _ := os.ReadFile(config)
+	if string(after) != string(before) {
+		t.Fatal("conflicting entry was overwritten")
 	}
 }
 

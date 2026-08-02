@@ -48,7 +48,7 @@ func documentChange(ctx context.Context, _ *mcp.CallToolRequest, input scopeInpu
 	if err := resolver.ValidateRoot(ctx, input.Repository); err != nil {
 		return failure(err)
 	}
-	ledger, err := sqliteadapter.Open(input.Repository)
+	ledger, err := sqliteadapter.OpenExisting(input.Repository)
 	if err != nil {
 		return failure(err)
 	}

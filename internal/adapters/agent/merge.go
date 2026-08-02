@@ -9,9 +9,8 @@ import (
 const managedGuidanceBegin = "DOCMANAGER-MANAGED-GUIDANCE-v1"
 
 func decodeConfig(data []byte) (map[string]any, error) {
-	plain := stripJSONC(string(data))
 	var config map[string]any
-	if err := json.Unmarshal([]byte(plain), &config); err != nil {
+	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, ErrMalformedConfig
 	}
 	mcp, ok := config["mcp"]
@@ -25,45 +24,6 @@ func decodeConfig(data []byte) (map[string]any, error) {
 
 func isObject(value any) bool { _, ok := value.(map[string]any); return ok }
 
-func stripJSONC(in string) string {
-	var out strings.Builder
-	inString, escaped := false, false
-	for i := 0; i < len(in); i++ {
-		if inString {
-			out.WriteByte(in[i])
-			if in[i] == '"' && !escaped {
-				inString = false
-			}
-			escaped = in[i] == '\\' && !escaped
-			continue
-		}
-		if in[i] == '"' {
-			inString = true
-			out.WriteByte(in[i])
-			continue
-		}
-		if i+1 < len(in) && in[i] == '/' && in[i+1] == '/' {
-			for i < len(in) && in[i] != '\n' {
-				i++
-			}
-			if i < len(in) {
-				out.WriteByte('\n')
-			}
-			continue
-		}
-		if i+1 < len(in) && in[i] == '/' && in[i+1] == '*' {
-			i += 2
-			for i+1 < len(in) && !(in[i] == '*' && in[i+1] == '/') {
-				i++
-			}
-			i++
-			continue
-		}
-		out.WriteByte(in[i])
-	}
-	return out.String()
-}
-
 func encodeConfig(config map[string]any, jsonc bool, comments string) ([]byte, error) {
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -76,18 +36,30 @@ func encodeConfig(config map[string]any, jsonc bool, comments string) ([]byte, e
 }
 
 func leadingComments(data []byte) string {
-	var lines []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "//") {
-			lines = append(lines, line)
-		} else if strings.TrimSpace(line) != "" {
-			break
+	text := string(data)
+	index := 0
+	for index < len(text) {
+		for index < len(text) && strings.ContainsRune(" \t\r\n", rune(text[index])) {
+			index++
+		}
+		switch {
+		case strings.HasPrefix(text[index:], "//"):
+			if newline := strings.IndexByte(text[index:], '\n'); newline >= 0 {
+				index += newline + 1
+			} else {
+				index = len(text)
+			}
+		case strings.HasPrefix(text[index:], "/*"):
+			end := strings.Index(text[index+2:], "*/")
+			if end < 0 {
+				return ""
+			}
+			index += end + 4
+		default:
+			return text[:index]
 		}
 	}
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.Join(lines, "\n") + "\n"
+	return text
 }
 
 func sameBytes(a, b []byte) bool { return bytes.Equal(a, b) }

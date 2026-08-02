@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	fsadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/filesystem"
+	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
 )
 
 var (
@@ -30,7 +31,22 @@ func WorkspaceInstall(target string, enableHook bool) (WorkspaceStatus, error) {
 	if err := Install(root); err != nil {
 		return WorkspaceStatus{}, err
 	}
+	ledger, err := sqliteadapter.Open(root)
+	if err != nil {
+		return WorkspaceStatus{}, err
+	}
+	if err := ledger.Close(); err != nil {
+		return WorkspaceStatus{}, err
+	}
 	if !enableHook {
+		if existing, ok, err := loadWorkspaceRecord(root); err != nil {
+			return WorkspaceStatus{}, err
+		} else if ok {
+			if err := verifyWorkspaceHook(root, existing.Hook); err != nil {
+				return WorkspaceStatus{}, err
+			}
+			return WorkspaceStatus{Root: root, State: "installed", Hook: "opted-in"}, nil
+		}
 		return WorkspaceStatus{Root: root, State: "installed", Hook: "absent"}, nil
 	}
 	state, release, err := workspaceStateTransaction()

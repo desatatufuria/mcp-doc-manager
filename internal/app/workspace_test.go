@@ -20,6 +20,12 @@ func TestWorkspaceInstallLeavesHookAbsentWithoutExplicitConsent(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(repo, ".git", "hooks", "pre-push")); !os.IsNotExist(err) {
 		t.Fatalf("default install created hook: %v", err)
 	}
+	if info, err := os.Stat(filepath.Join(repo, ".docmanager", "ledger.db")); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("ledger = %v, %v", info, err)
+	}
+	if _, err := WorkspaceInstall(repo, false); err != nil {
+		t.Fatalf("idempotent install: %v", err)
+	}
 }
 
 func TestWorkspaceInstallRequiresExplicitHookOptIn(t *testing.T) {

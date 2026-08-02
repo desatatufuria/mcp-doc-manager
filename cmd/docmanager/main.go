@@ -26,6 +26,7 @@ Commands:
   mcp                  Start the stdio MCP server
   document-change      Analyze a selected Git scope
   verify               Verify an analysis receipt
+  install              Initialize a repository and configure OpenCode
   workspace            Manage repository-local integration
   release              Manage releases
   agent                Manage agent integration
@@ -102,7 +103,7 @@ func run(args []string) error {
 		if err := resolver.ValidateRoot(context.Background(), request.Repository); err != nil {
 			return err
 		}
-		ledger, err := sqliteadapter.Open(request.Repository)
+		ledger, err := sqliteadapter.OpenExisting(request.Repository)
 		if err != nil {
 			return err
 		}
@@ -130,7 +131,9 @@ func run(args []string) error {
 		return runResource(args[0], args[1:])
 	case "workspace":
 		return runWorkspace(args[1:], false)
-	case "install", "doctor", "uninstall":
+	case "install":
+		return runInstall(args[1:], productionInstallRuntime(os.Stdin, os.Stdout))
+	case "doctor", "uninstall":
 		return runWorkspace(append([]string{args[0]}, args[1:]...), true)
 	default:
 		return domain.ErrUnsupportedRequest

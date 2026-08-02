@@ -21,7 +21,7 @@ func TestMCPStdioDocumentChangeAndReceipt(t *testing.T) {
 		t.Skip("skipping MCP stdio integration test in short mode")
 	}
 	repo := mcpRepository(t)
-	if err := app.Install(repo); err != nil {
+	if _, err := app.WorkspaceInstall(repo, false); err != nil {
 		t.Fatal(err)
 	}
 	defer app.Uninstall(repo)
@@ -91,6 +91,29 @@ func TestMCPStdioDocumentChangeAndReceipt(t *testing.T) {
 	}
 	if statusAfter := mcpGitOutput(t, repo, "status", "--porcelain=v1", "-z"); statusAfter != statusBefore {
 		t.Fatalf("Git status mutated: before %q after %q", statusBefore, statusAfter)
+	}
+}
+
+func TestMCPDocumentChangeRequiresWorkspaceInitialization(t *testing.T) {
+	repo := mcpRepository(t)
+	writeMCP(t, filepath.Join(repo, "README.md"), "before\n")
+	mcpGit(t, repo, "add", "README.md")
+	mcpGit(t, repo, "commit", "-m", "initial")
+	writeMCP(t, filepath.Join(repo, "README.md"), "after\n")
+	mcpGit(t, repo, "add", "README.md")
+	_, output, err := documentChange(context.Background(), nil, scopeInput{Repository: repo, Scope: domain.Scope{Kind: domain.ScopeStaged}})
+	if err != nil || output.Error != domain.ErrLedgerFailure.Error() {
+		t.Fatalf("before install = %#v, %v", output, err)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".docmanager")); !os.IsNotExist(err) {
+		t.Fatalf("MCP analysis created state: %v", err)
+	}
+	if _, err := app.WorkspaceInstall(repo, false); err != nil {
+		t.Fatal(err)
+	}
+	_, output, err = documentChange(context.Background(), nil, scopeInput{Repository: repo, Scope: domain.Scope{Kind: domain.ScopeStaged}})
+	if err != nil || output.Report == nil {
+		t.Fatalf("after install = %#v, %v", output, err)
 	}
 }
 

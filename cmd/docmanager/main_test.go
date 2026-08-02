@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,7 @@ func TestCLIHelp(t *testing.T) {
 		"  mcp                  Start the stdio MCP server\n" +
 		"  document-change      Analyze a selected Git scope\n" +
 		"  verify               Verify an analysis receipt\n" +
+		"  install              Initialize a repository and configure OpenCode\n" +
 		"  workspace            Manage repository-local integration\n" +
 		"  release              Manage releases\n" +
 		"  agent                Manage agent integration\n"
@@ -135,7 +137,7 @@ func TestCLIDocumentChangeVerifyAndLifecycleWithoutDocumentationMutation(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	runCLI(t, "install", "--target", repo)
+	runCLI(t, "workspace", "install", "--target", repo)
 	if _, err := os.Stat(filepath.Join(repo, ".docmanager")); err != nil {
 		t.Fatal(err)
 	}
@@ -240,15 +242,40 @@ func TestCLIAliasesAreDeprecatedOnlyInHumanOutput(t *testing.T) {
 	repo := t.TempDir()
 	cliGit(t, repo, "init")
 
-	human := runCLI(t, "install", "--target", repo)
-	if string(human) != "deprecated: use workspace install\n" {
-		t.Fatalf("install alias output = %q", human)
-	}
+	runCLI(t, "workspace", "install", "--target", repo)
 	t.Cleanup(func() { runCLI(t, "uninstall", "--target", repo) })
+	human := runCLI(t, "doctor", "--target", repo)
+	if !strings.Contains(string(human), "deprecated: use workspace doctor\n") {
+		t.Fatalf("doctor alias output = %q", human)
+	}
 
 	machine := runCLI(t, "doctor", "--target", repo, "--json")
 	if string(machine) == "" || string(machine[:1]) != "{" || string(machine) == "deprecated: use workspace doctor\n" {
 		t.Fatalf("doctor JSON alias output = %q", machine)
+	}
+}
+
+func TestCLIDocumentChangeRequiresWorkspaceInitialization(t *testing.T) {
+	repo := t.TempDir()
+	cliGit(t, repo, "init")
+	cliGit(t, repo, "config", "user.email", "test@example.com")
+	cliGit(t, repo, "config", "user.name", "Test")
+	writeCLI(t, filepath.Join(repo, "README.md"), "before\n")
+	cliGit(t, repo, "add", "README.md")
+	cliGit(t, repo, "commit", "-m", "initial")
+	writeCLI(t, filepath.Join(repo, "README.md"), "after\n")
+	cliGit(t, repo, "add", "README.md")
+
+	output, err := runCLIError("document-change", "--repo", repo, "--scope", "staged")
+	if err == nil || string(output) != "ledger_failure\n" {
+		t.Fatalf("before install = %v, %q", err, output)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".docmanager")); !os.IsNotExist(err) {
+		t.Fatalf("analysis created state: %v", err)
+	}
+	runCLI(t, "workspace", "install", "--target", repo)
+	if output := runCLI(t, "document-change", "--repo", repo, "--scope", "staged"); len(output) == 0 {
+		t.Fatal("analysis after install returned no report")
 	}
 }
 
