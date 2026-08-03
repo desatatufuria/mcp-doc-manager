@@ -279,3 +279,35 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Pre-correction review-visible child against `f10a07b`: 194 additions + 21 deletions = 215 changed lines across exactly the four rollback files. Fail-closed correction native churn (not PR size): tree `2138a25571de7c1b62a5b0f38c3ab611bf37bada` -> `72219704400780e13c7f8691b3063f6340ae7fa6` = 158 changed lines, explicitly accepted by the maintainer. The 100 lines are net review-visible child growth from 215 to 315, not actor churn; the final child against `f10a07b` is 300 additions + 22 deletions = 322 changed lines. Native split-replanning churn (not PR size): tree `31a61555644b09d9a6ea5fef4525ef9df3876c0d` -> `1b48d6984ce958623b7090abb1167b935b17c790` = 454 changed lines, explicitly accepted by the maintainer because it removed the failed combined oracle candidate.
 - Tasks 2.7–2.9 are checked; 2.10–2.12 reserve the complete snapshot oracle, and 2.13 onward remain unchecked. No snapshot/no-write guarantee is claimed in this slice.
 - Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, shared phase protocol, and OpenSpec convention; CodeGraph was unavailable for this worktree.
+
+## Unit 2a2.1c Complete No-write Snapshot Oracle (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. Test-only `snapshotRadiograph` proves that `Radiograph` preserves complete ordinary and real linked-worktree state; production `Radiograph` is unchanged.
+- Parent-owned native token `sha256:ea8b4103ef29fec9c9079bcba78ef5fc8b82b9b6d160654d88b02dbc19ec67ed` was neither acquired, reset, nor settled.
+- Work unit: `unit-2a2-1c-snapshot-oracle`; chained child targets its immediate 2a2.1b parent, never `main`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.10 | `resolver_test.go` / real-Git integration | `go test ./internal/adapters/git -count=1` — exit 0; package passed | `go test ./internal/adapters/git -run 'TestRadiographSnapshotOracle' -count=1 -v` — exit 1; `snapshotRadiograph` undefined | same focused command — exit 0; ordinary and linked before/after receipts match | ordinary + `git worktree add` linked fixtures; every required state field | test-only helper; gofmt and focused pass |
+| 2.11 | `resolver_test.go` / integration | same package baseline | same missing-helper RED | focused exit 0; snapshots reject symlink, FIFO, and missing bound path | bytes/mode plus git-dir/common-dir/index/config/hooks/primary/alternate/docmanager mutations change identity | length-framed canonical digest; focused pass |
+| 2.12 | OpenSpec evidence | N/A | N/A | package, compatibility, full suite, format/check, and accounting passed | N/A | N/A |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/adapters/git -run 'TestRadiographSnapshotOracle' -count=1 -v` — exit 0; 2 top-level tests and 14 subtests passed. |
+| Runtime harness | Same focused command — exit 0; creates ordinary and real `git worktree add` linked repositories, snapshots before/after `Radiograph`, and observes equal receipts. |
+| Regression / compatibility / full | `go test ./internal/adapters/git -count=1`; `go test ./internal/app ./internal/adapters/mcp -count=1`; `go test ./...` — all exit 0; full suite passed 9 tested packages and `assets` had no test files. |
+| Format / check | `gofmt -w internal/adapters/git/resolver_test.go`; `git diff --check` — exit 0. |
+| Rollback boundary | Revert only `internal/adapters/git/resolver_test.go`, the 2.10–2.12 task checkboxes, and this cumulative progress section; production `Radiograph` and earlier path-resolution behavior are untouched. |
+
+### Delivery and Scope
+
+- Snapshot identity binds worktree bytes/modes (excluding separately-bound `.git`), git-dir, common-dir, index, config, hooks, primary/alternate object-store trees, and `.docmanager`; any symlink, special file, or missing/read-error path fails closed.
+- Exact child accounting against `2045995`: 249 additions + 4 deletions = 253 changed lines, within the 400-line ceiling; paths are limited to this test, task checkboxes, and cumulative evidence.
+- No later stage/scope tasks were implemented.

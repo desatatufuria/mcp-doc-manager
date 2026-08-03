@@ -80,9 +80,9 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 ## Unit 2a2.1c: Complete No-write Snapshot Oracle (base=completed 2a2.1b paths)
 
-- [ ] 2.10 RED: `resolver_test.go` defines complete ordinary/linked before/after no-write snapshots for worktree, index, config, hooks, primary/alternate objects, and `.docmanager`.
-- [ ] 2.11 GREEN: implement test-only complete snapshot identity and fail-closed special-file/symlink-target/read errors; prove sensitivity for every bound field.
-- [ ] 2.12 Evidence: record ordinary/linked no-write receipts, exact accounting, and snapshot-only rollback.
+- [x] 2.10 RED: `resolver_test.go` defines complete ordinary/linked before/after no-write snapshots for worktree, index, config, hooks, primary/alternate objects, and `.docmanager`.
+- [x] 2.11 GREEN: implement test-only complete snapshot identity and fail-closed special-file/symlink-target/read errors; prove sensitivity for every bound field.
+- [x] 2.12 Evidence: record ordinary/linked no-write receipts, exact accounting, and snapshot-only rollback.
 
 ## Unit 2a2.2: Stage & Scope Safety (base=completed 2a2.1c oracle)
 
@@ -111,7 +111,7 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 | Old | New |
 |---|---|
-| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b paths / 2.7–2.9 (checked) + 2a2.1c oracle / 2.10–2.12 (unchecked) |
+| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b paths / 2.7–2.9 (checked) + 2a2.1c oracle / 2.10–2.12 (checked) |
 | 2a2.2 / 2.7–2.9 | 2a2.2 / 2.13–2.15 |
 | 2b / 2.10–2.11 | 2b / 2.16–2.17 |
 | 2c / 2.12 | 2c / 2.18 |
