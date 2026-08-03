@@ -294,6 +294,148 @@ func TestResolverRadiographUsesReadOnlyGitCommands(t *testing.T) {
 	}
 }
 
+func TestRadiographPathsPreserveFramedPaths(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want []string
+		ok   bool
+	}{
+		{"LF preserves spaces", "/tmp/git paths/a\n/tmp/git paths/b\n", []string{"/tmp/git paths/a", "/tmp/git paths/b"}, true},
+		{"CRLF preserves spaces", "/tmp/git paths/a\r\n/tmp/git paths/b\r\n", []string{"/tmp/git paths/a", "/tmp/git paths/b"}, true},
+		{"embedded blank record", "/tmp/a\n\n/tmp/b\n", nil, false},
+		{"stray carriage return", "/tmp/a\rbroken\n/tmp/b\n", nil, false},
+		{"missing terminal newline", "/tmp/a\n/tmp/b", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := newlinePaths([]byte(test.raw))
+			if ok != test.ok || !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("newlinePaths(%q) = %#v, %t; want %#v, %t", test.raw, got, ok, test.want, test.ok)
+			}
+		})
+	}
+}
+
+func TestResolverRadiographPathsResolveOrdinaryAndLinkedWorktrees(t *testing.T) {
+	spacedTMP := filepath.Join(t.TempDir(), "git paths")
+	if err := os.Mkdir(spacedTMP, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", spacedTMP)
+	ordinary := newRepositoryAt(t, filepath.Join(spacedTMP, "ordinary repository"))
+	write(t, filepath.Join(ordinary, "README.md"), "fixture\n")
+	runGit(t, ordinary, "add", "README.md")
+	runGit(t, ordinary, "commit", "-m", "fixture")
+	linked := filepath.Join(spacedTMP, "linked worktree")
+	runGit(t, ordinary, "worktree", "add", "-b", "linked", linked)
+	primary := filepath.Join(ordinary, ".git", "objects")
+	alternate := filepath.Join(spacedTMP, "alternate objects")
+	if err := os.MkdirAll(alternate, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(primary, alternate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(primary, "info", "alternates"), relative+"\r\n")
+	for _, root := range []string{ordinary, linked} {
+		paths, err := (Resolver{GitPath: "git"}).radiographPaths(context.Background(), "git", root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantGitDir := filepath.Join(ordinary, ".git")
+		if root == linked {
+			pointer, err := os.ReadFile(filepath.Join(linked, ".git"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantGitDir = expectedCleanAbsolutePath(t, strings.TrimSuffix(strings.TrimPrefix(string(pointer), "gitdir: "), "\n"))
+		}
+		if paths.gitDir != wantGitDir || paths.commonDir != filepath.Join(ordinary, ".git") || paths.index != filepath.Join(wantGitDir, "index") || paths.config != filepath.Join(paths.commonDir, "config") || paths.hooks != filepath.Join(paths.commonDir, "hooks") || paths.primaryObjects != primary || !reflect.DeepEqual(paths.alternateObjects, []string{alternate}) {
+			t.Fatalf("paths(%q) = %#v", root, paths)
+		}
+		for _, path := range append([]string{paths.gitDir, paths.commonDir, paths.index, paths.config, paths.hooks, paths.primaryObjects}, paths.alternateObjects...) {
+			if !filepath.IsAbs(path) || !strings.Contains(path, "git paths") {
+				t.Fatalf("path = %q", path)
+			}
+		}
+	}
+}
+
+func TestResolverRadiographPathsRejectsLexicalAliasesAndSymlinks(t *testing.T) {
+	gitDir := filepath.Join(t.TempDir(), "git-dir")
+	if err := os.MkdirAll(filepath.Join(gitDir, "objects", "info"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(gitDir, "index"), "")
+	write(t, filepath.Join(gitDir, "config"), "")
+	if err := os.Mkdir(filepath.Join(gitDir, "hooks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "git-link")
+	if err := os.Symlink(gitDir, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ name, gitDir, commonDir string }{
+		{"dot alias", gitDir + string(filepath.Separator) + ".", gitDir},
+		{"duplicate separator", strings.Replace(gitDir, string(filepath.Separator), string(filepath.Separator)+string(filepath.Separator), 1), gitDir},
+		{"symlink", link, link},
+		{"absolute alternate dot alias", gitDir, gitDir},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "absolute alternate dot alias" {
+				write(t, filepath.Join(gitDir, "objects", "info", "alternates"), gitDir+string(filepath.Separator)+"objects"+string(filepath.Separator)+".\n")
+			}
+			proxy := filepath.Join(t.TempDir(), "git")
+			write(t, proxy, "#!/bin/sh\nprintf '%s\\n%s\\n' '"+test.gitDir+"' '"+test.commonDir+"'\n")
+			if err := os.Chmod(proxy, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := (Resolver{GitPath: proxy}).radiographPaths(context.Background(), proxy, t.TempDir()); !errors.Is(err, domain.ErrContentRead) {
+				t.Fatalf("error = %v, want ErrContentRead", err)
+			}
+		})
+	}
+}
+
+func expectedCleanAbsolutePath(t *testing.T, path string) string {
+	if !filepath.IsAbs(path) || path != filepath.Clean(path) {
+		t.Fatalf("path is not clean and absolute: %q", path)
+	}
+	physical, err := filepath.EvalSymlinks(path)
+	if err != nil || physical != path {
+		t.Fatalf("path resolves through a symlink: %q, %q, %v", path, physical, err)
+	}
+	return path
+}
+
+func TestResolverRadiographPathsFailClosed(t *testing.T) {
+	for _, output := range []string{"relative\n/absolute\n", "/only-one\n", "\n/absolute\n"} {
+		t.Run(strings.ReplaceAll(output, "\n", "_"), func(t *testing.T) {
+			proxy := filepath.Join(t.TempDir(), "git")
+			write(t, proxy, "#!/bin/sh\nprintf '%s' '"+output+"'\n")
+			if err := os.Chmod(proxy, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := (Resolver{GitPath: proxy}).radiographPaths(context.Background(), proxy, t.TempDir()); !errors.Is(err, domain.ErrContentRead) {
+				t.Fatalf("error = %v, want ErrContentRead", err)
+			}
+		})
+	}
+}
+
+func TestResolverRadiographPathsRejectMissingResolvedPaths(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	proxy := filepath.Join(t.TempDir(), "git")
+	write(t, proxy, "#!/bin/sh\nprintf '%s\\n%s\\n' '"+missing+"' '"+missing+"'\n")
+	if err := os.Chmod(proxy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Resolver{GitPath: proxy}).radiographPaths(context.Background(), proxy, t.TempDir()); !errors.Is(err, domain.ErrContentRead) {
+		t.Fatalf("error = %v, want ErrContentRead", err)
+	}
+}
+
 func TestResolverRejectsRootReplacementBeforeEvidence(t *testing.T) {
 	repo := newRepository(t)
 	write(t, filepath.Join(repo, "README.md"), "fixture\n")
@@ -609,7 +751,14 @@ func poisonGit(t *testing.T, repo string) {
 
 func newRepository(t *testing.T) string {
 	t.Helper()
-	repo := t.TempDir()
+	return newRepositoryAt(t, t.TempDir())
+}
+
+func newRepositoryAt(t *testing.T, repo string) string {
+	t.Helper()
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, repo, "init")
 	runGit(t, repo, "config", "user.email", "test@example.com")
 	runGit(t, repo, "config", "user.name", "Test User")

@@ -250,5 +250,32 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 | Rollback | Revert only `internal/adapters/git/resolver.go`, `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/design.md`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and this cumulative `apply-progress.md` section; this removes safe Git/root binding without changing Unit 2a1 inventory/classification. |
 ### Delivery and Deferred Scope
 - Feature-chain slice: `fix/living-documentation-lifecycle-02a2-git-safety` → `feat/living-documentation-lifecycle-02-radiography`; no `size:exception`; pre-evidence-correction code/test candidate tree `15166a7275f20ea2eda5d9fefd3fb10317c408e6` against `878aa1f` is 275 additions + 83 deletions = 358 changes across the final five-file rollback boundary, within the 400-line maximum. Growth from the old 321-line publication receipt to the corrected 358-line receipt is 37 lines of net publication receipt growth, not actor or correction churn.
-- Tasks 2.7–2.9 retain linked-worktree snapshots, alternate object stores, symlink targets, hooks/config/index/object fingerprints, and actual before/after Radiograph oracle. Tasks 2.10 onward remain deferred.
+- Tasks 2.7–2.9 retain linked-worktree path resolution only; all snapshot/before-after guarantees are deferred to 2a2.1c.
 - Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, and shared phase protocol; CodeGraph query reported this worktree unindexed.
+
+## Unit 2a2.1b Linked-worktree Path Resolution (Strict TDD)
+
+### Result Contract
+- Outcome: passed. The failed combined oracle candidate was split because path resolution is independently reviewable; snapshot identity, sensitivity, special-file/symlink proof, and no-write before/after receipts are deferred to Unit 2a2.1c.
+- Parent-owned native token was neither acquired, reset, nor settled. `Radiograph` does not consume this test-owned helper, so path resolution cannot introduce a new runtime failure.
+
+### TDD Cycle Evidence
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.7 | `resolver_test.go` / real-Git integration | `go test ./internal/adapters/git -count=1` — exit 0 | focused command — exit 1: `newlinePaths` return contract and independent linked pointer oracle absent | exit 0: LF/CRLF spaces pass; blank records and stray CR reject | ordinary and linked worktrees | compact framing helper; focused pass |
+| 2.8 | `resolver_test.go` / real-Git integration | same | focused command — exit 1: lexical aliases and symlinks were accepted | exit 0: raw absolute alternate aliases reject before cleaning; relative alternates stay green | ordinary + linked + alias/symlink/missing fixtures | compact unexported helper |
+| 2.9 | OpenSpec evidence | N/A | N/A | focused/runtime, regressions, compatibility, full, format/check, and accounting pass | N/A | N/A |
+
+### Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Focused test / runtime harness | `go test ./internal/adapters/git -run 'Test(RadiographPathsPreserveFramedPaths|ResolverRadiographPathsResolveOrdinaryAndLinkedWorktrees|ResolverRadiographPathsFailClosed|ResolverRadiographPathsRejectsLexicalAliasesAndSymlinks|ResolverRadiographPathsRejectMissingResolvedPaths)$' -count=1 -v` — exit 0; 5 top-level tests, including absolute alternate alias rejection. Real `git worktree add` covers ordinary and linked roots. |
+| Resolver / 2a2.1a regression | `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/git -run 'TestResolver(RadiographUsesReadOnlyGitCommands|RejectsRootReplacementBeforeEvidence)$' -count=1 -v` — exit 0. |
+| Compatibility / full / checks | `go test ./internal/app ./internal/adapters/mcp -count=1`; `go test ./...`; `gofmt -l internal/adapters/git/resolver.go internal/adapters/git/resolver_test.go`; `git diff --check` — all exit 0. |
+| Rollback boundary | Revert only `internal/adapters/git/resolver.go`, `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and `openspec/changes/living-documentation-lifecycle/apply-progress.md`; preserves 2a2.1a and removes only path-resolution proof. |
+
+### Delivery and Deferred Scope
+- Chain: feature-branch-chain child targets `fix/living-documentation-lifecycle-02a2-git-safety`, never `main`; no `size:exception`.
+- Pre-correction review-visible child against `f10a07b`: 194 additions + 21 deletions = 215 changed lines across exactly the four rollback files. Fail-closed correction native churn (not PR size): tree `2138a25571de7c1b62a5b0f38c3ab611bf37bada` -> `72219704400780e13c7f8691b3063f6340ae7fa6` = 158 changed lines, explicitly accepted by the maintainer. The 100 lines are net review-visible child growth from 215 to 315, not actor churn; the final child against `f10a07b` is 300 additions + 22 deletions = 322 changed lines. Native split-replanning churn (not PR size): tree `31a61555644b09d9a6ea5fef4525ef9df3876c0d` -> `1b48d6984ce958623b7090abb1167b935b17c790` = 454 changed lines, explicitly accepted by the maintainer because it removed the failed combined oracle candidate.
+- Tasks 2.7–2.9 are checked; 2.10–2.12 reserve the complete snapshot oracle, and 2.13 onward remain unchecked. No snapshot/no-write guarantee is claimed in this slice.
+- Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, shared phase protocol, and OpenSpec convention; CodeGraph was unavailable for this worktree.

@@ -4,10 +4,10 @@
 
 | Field | Value |
 |---|---|
-| Changed-line budget | Each child: ≤400 additions+deletions; candidate work reshapes to 2a2.1a only |
+| Changed-line budget | Each child: ≤400 additions+deletions; first slice is 2a2.1b paths only |
 | 400-line budget risk | High overall; Low per child |
 | Chained PRs recommended | Yes |
-| Suggested split | 2a1 → 2a2.1a → 2a2.1b → 2a2.2 → 2b → 2c → 3 |
+| Suggested split | 2a1 → 2a2.1a → 2a2.1b paths → 2a2.1c oracle → 2a2.2 → 2b → 2c → 3 |
 | Delivery strategy | ask-on-risk, resolved by approved chain |
 | Chain strategy | feature-branch-chain |
 
@@ -23,13 +23,14 @@ No `size:exception`: every child is capped at 400 additions+deletions.
 |---|---|---|---|---|---|
 | 2a1 | Inventory/classification | base=PR #6 | `go test ./internal/adapters/git` | temporary Git fixture | recorded 2a1-only hunks |
 | 2a2.1a | Safe Git execution/root binding | PR #7; `fix/living-documentation-lifecycle-02a2-git-safety`, base=PR #7 | `go test ./internal/adapters/git -run 'TestResolver(RadiographUsesReadOnlyGitCommands|RejectsRootReplacementBeforeEvidence)$'` | traversal/subdir/symlink and root-replacement fixtures | root contract, binding, safe-env hunks |
-| 2a2.1b | Linked-worktree snapshot oracle | base=completed 2a2.1a branch | `go test ./internal/adapters/git -run 'Test.*(Radiograph|Snapshot|Worktree|ObjectStore)'` | ordinary + linked worktree before/after `Radiograph` | git-dir resolution and snapshot-oracle hunks |
-| 2a2.2 | Stage/scope safety | base=completed 2a2.1b branch | `go test ./internal/adapters/git -run 'Test.*(Unmerged|Staged|Unborn|EmptyIndex|CommitA)'` | unmerged/staged/unborn/initial/empty-index/`commit -a` oracle | stage identity/output hunks |
+| 2a2.1b | Linked-worktree path resolution | base=completed 2a2.1a branch | `go test ./internal/adapters/git -run 'Test(RadiographPaths|ResolverRadiographPaths)'` | ordinary + linked worktree path fixtures | git-dir/common-dir/index/config/hooks/object path hunks |
+| 2a2.1c | Complete no-write snapshot oracle | base=completed 2a2.1b paths branch | `go test ./internal/adapters/git -run 'Test.*(Snapshot|NoWrite|Worktree)'` | ordinary + linked worktree before/after `Radiograph` | snapshot-oracle hunks |
+| 2a2.2 | Stage/scope safety | base=completed 2a2.1c oracle branch | `go test ./internal/adapters/git -run 'Test.*(Unmerged|Staged|Unborn|EmptyIndex|CommitA)'` | unmerged/staged/unborn/initial/empty-index/`commit -a` oracle | stage identity/output hunks |
 | 2b | Planning service | base=2a2.2 branch | `go test ./internal/app` | radiography→bounded plan | service/tests only |
 | 2c | MCP staging | base=2b branch | `go test ./internal/adapters/mcp` | stdio radiography→plan | MCP adapter/tests only |
 | 3 | Catalog | base=2c branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
 
-Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b→2a2.2→2b→2c→3; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
+Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→2a2.1c oracle→2a2.2→2b→2c→3; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
 
 ## Unit 1
 
@@ -71,26 +72,32 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b→2a2.2�
 - [x] 2.5 GREEN: `resolver.go` binds exact lexical/physical root identity and centralizes read-only Git env: optional locks, lazy fetch, replacements, external diff/textconv, fsmonitor, system/global config/attributes disabled as applicable.
 - [x] 2.6 Evidence: fixtures prove safe failure/no execution on root replacement; exact accounting is ≤400 additions+deletions and only 2a2.1a files/behavior revert.
 
-## Unit 2a2.1b: Complete Linked-worktree Snapshot Oracle (base=completed 2a2.1a)
+## Unit 2a2.1b: Linked-worktree Path Resolution (base=completed 2a2.1a)
 
-- [ ] 2.7 RED: `resolver_test.go` covers ordinary/linked git-dir, common-dir, index, config, and hooks resolution plus symlink-target and primary/alternate object-store identity.
-- [ ] 2.8 GREEN: non-mutating `Radiograph` snapshots packs/loose objects, raw/logical index, status, HEAD/tree, config, hooks, and `.docmanager` without writes.
-- [ ] 2.9 Evidence: actual ordinary/linked before/after `Radiograph` receipts match every snapshot field; ≤400 accounting and oracle-only rollback.
+- [x] 2.7 RED: `resolver_test.go` frames ordinary/linked git-dir and common-dir output without whitespace loss; malformed and non-absolute output fails closed.
+- [x] 2.8 GREEN: test-owned resolver exposes exact git-dir, common-dir, index, config, hooks, primary-object, and relative alternate-object paths; missing resolved paths fail closed without changing `Radiograph` behavior.
+- [x] 2.9 Evidence: focused spaced ordinary/linked fixtures, resolver and 2a2.1a regressions, compatibility/full/check/accounting pass; paths-only rollback is isolated.
 
-## Unit 2a2.2: Stage & Scope Safety (base=completed 2a2.1b)
+## Unit 2a2.1c: Complete No-write Snapshot Oracle (base=completed 2a2.1b paths)
 
-- [ ] 2.10 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
-- [ ] 2.11 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
-- [ ] 2.12 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
+- [ ] 2.10 RED: `resolver_test.go` defines complete ordinary/linked before/after no-write snapshots for worktree, index, config, hooks, primary/alternate objects, and `.docmanager`.
+- [ ] 2.11 GREEN: implement test-only complete snapshot identity and fail-closed special-file/symlink-target/read errors; prove sensitivity for every bound field.
+- [ ] 2.12 Evidence: record ordinary/linked no-write receipts, exact accounting, and snapshot-only rollback.
+
+## Unit 2a2.2: Stage & Scope Safety (base=completed 2a2.1c oracle)
+
+- [ ] 2.13 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
+- [ ] 2.14 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
+- [ ] 2.15 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
 
 ## Unit 2b: Planning Service (base=completed 2a2.2)
 
-- [ ] 2.13 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
-- [ ] 2.14 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
+- [ ] 2.16 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
+- [ ] 2.17 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
 
 ## Unit 2c: MCP Staging (base=completed 2b)
 
-- [ ] 2.15 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
+- [ ] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
 
 ## Unit 3: Catalog (base=completed 2c)
 
@@ -104,7 +111,7 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b→2a2.2�
 
 | Old | New |
 |---|---|
-| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b / 2.7–2.9 (unchecked) |
-| 2a2.2 / 2.7–2.9 | 2a2.2 / 2.10–2.12 |
-| 2b / 2.10–2.11 | 2b / 2.13–2.14 |
-| 2c / 2.12 | 2c / 2.15 |
+| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b paths / 2.7–2.9 (checked) + 2a2.1c oracle / 2.10–2.12 (unchecked) |
+| 2a2.2 / 2.7–2.9 | 2a2.2 / 2.13–2.15 |
+| 2b / 2.10–2.11 | 2b / 2.16–2.17 |
+| 2c / 2.12 | 2c / 2.18 |

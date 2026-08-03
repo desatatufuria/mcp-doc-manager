@@ -329,6 +329,101 @@ type inventoryEntry struct {
 	tracked        bool
 }
 
+type radiographPathSet struct {
+	gitDir, commonDir, index, config, hooks, primaryObjects string
+	alternateObjects                                        []string
+}
+
+func (r Resolver) radiographPaths(ctx context.Context, git, root string) (radiographPathSet, error) {
+	output, err := r.run(ctx, git, root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+	if err != nil {
+		return radiographPathSet{}, err
+	}
+	paths, ok := newlinePaths(output)
+	if !ok || len(paths) != 2 {
+		return radiographPathSet{}, domain.ErrContentRead
+	}
+	for i := range paths {
+		if paths[i], ok = cleanAbsolutePath(paths[i]); !ok {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+	}
+	result := radiographPathSet{
+		gitDir:         paths[0],
+		commonDir:      paths[1],
+		index:          filepath.Join(paths[0], "index"),
+		config:         filepath.Join(paths[1], "config"),
+		hooks:          filepath.Join(paths[1], "hooks"),
+		primaryObjects: filepath.Join(paths[1], "objects"),
+	}
+	for _, path := range []string{result.gitDir, result.commonDir, result.index, result.config, result.hooks, result.primaryObjects} {
+		if _, ok := cleanAbsolutePath(path); !ok {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+	}
+	alternates, err := os.ReadFile(filepath.Join(result.primaryObjects, "info", "alternates"))
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil {
+		return radiographPathSet{}, domain.ErrContentRead
+	}
+	paths, ok = newlinePaths(alternates)
+	if !ok {
+		return radiographPathSet{}, domain.ErrContentRead
+	}
+	for _, alternate := range paths {
+		if filepath.IsAbs(alternate) && alternate != filepath.Clean(alternate) {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+		if !filepath.IsAbs(alternate) {
+			alternate = filepath.Join(result.primaryObjects, alternate)
+		}
+		alternate, ok = cleanAbsolutePath(alternate)
+		if !ok {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+		result.alternateObjects = append(result.alternateObjects, alternate)
+	}
+	sort.Strings(result.alternateObjects)
+	return result, nil
+}
+
+func newlinePaths(raw []byte) ([]string, bool) {
+	if len(raw) == 0 {
+		return nil, true
+	}
+	if raw[len(raw)-1] != '\n' {
+		return nil, false
+	}
+	lines := bytes.Split(raw, []byte{'\n'})
+	paths := make([]string, 0, len(lines)-1)
+	for _, line := range lines[:len(lines)-1] {
+		if len(line) == 0 {
+			return nil, false
+		}
+		if line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if len(line) == 0 || bytes.Contains(line, []byte{'\r'}) {
+			return nil, false
+		}
+		paths = append(paths, string(line))
+	}
+	return paths, true
+}
+
+func cleanAbsolutePath(raw string) (string, bool) {
+	if !filepath.IsAbs(raw) || raw != filepath.Clean(raw) {
+		return "", false
+	}
+	physical, err := filepath.EvalSymlinks(raw)
+	if err != nil || physical != raw {
+		return "", false
+	}
+	return raw, true
+}
+
 func radiographyExclusion(file, mode string) (string, string) {
 	lower := strings.ToLower(file)
 	base := strings.ToLower(path.Base(file))
