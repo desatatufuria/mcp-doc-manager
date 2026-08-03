@@ -426,3 +426,68 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Tools added: `radiograph` and `propose_plan`; `propose_plan` uses the completed `app.PlanningService`, preserves its bounded actions, denial semantics, and declared-local provenance, and has no SQLite/authoring path.
 - Unit 3 catalog, persistence, audit, authorization verification, and idempotency behavior remain unimplemented.
 - Exact child accounting against `4e0d959`: 186 additions + 7 deletions = 193 changed lines; this is within the 400-line ceiling.
+
+## Unit 3a Catalog Import & Evidence (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. `CatalogService` derives in-memory catalog entries and evidence-backed audit treatments; it does not persist lifecycle state, author visible documents, expose MCP behavior, or implement `VerifyOutcome`.
+- Parent-supplied native runtime acquire state: `proceed`; token `sha256:c4b96469110041cc4130b2644b61eb314bdaca9c928b4798430fa0e90e9006d2` was not acquired, reset, or settled by this child.
+- Work unit: `unit-3a-catalog-import-evidence`; feature-branch-chain child starts at immediate parent PR #13 commit `7e2e0fb`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 3.1 | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app -count=1` — exit 0; package passed | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 1; catalog service/import/assessment symbols undefined | same command — exit 0; import, provenance, stale, uncertain, and orphan scenarios passed | approved in-place import plus three distinct evidence states | `gofmt -w`; focused suite passed |
+| 3.2 | `internal/app/lifecycle_service_test.go` / unit | same package baseline | same missing-symbol RED gate | same command — exit 0; evidenced update, review, orphan, conflict, and no-action scenarios passed | five treatments plus missing-evidence refusal | compact pure in-memory service; focused suite passed |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 0; 3 top-level tests and 8 treatment subtests passed. |
+| Runtime harness | N/A — Unit 3a has no runtime boundary: `CatalogService` is a pure in-memory application service with no filesystem, SQLite, Git, or MCP dependency. |
+| Regressions | `go test ./internal/app -count=1 -v`; `go test ./internal/domain ./internal/adapters/sqlite -count=1`; `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/mcp -count=1` — all exit 0. |
+| Full / checks | `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files. `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; `git diff --check` — exit 0/no output. |
+| Rollback boundary | Revert only `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, tasks 3.1–3.2 and this Unit 3a progress section; this removes in-memory catalog import/evidence behavior while preserving Units 1–2c and leaving Unit 3b persistence, verification, and MCP work absent. |
+
+### Delivery and Scope
+
+- Tasks 3.1–3.2 are complete and Unit 3 is explicitly split into 3a (this child) and 3b (tasks 3.3–3.5) without changing requirements.
+- Exact child accounting against `7e2e0fb`: 199 additions + 6 deletions = 205 changed lines, within the 400-line ceiling.
+- `VerifyOutcome`, catalog persistence/audit storage, idempotent MCP, final verification, and any visible-document mutation are deferred to Unit 3b.
+
+### Gatekeeper Corrective Rerun: Import Provenance and Deferred Verification
+
+#### Result Contract
+
+- Outcome: passed.
+- Parent-supplied native acquire state: `proceed`; token `sha256:eadf0671d21fd101f772ce143940bbb313aa7215e8ece6328cfe49607600b512` was neither acquired, reset, nor settled by this child.
+- Work unit: `unit-3a-catalog-import-evidence-correction`; one bounded attempt; RDD remains disabled.
+- Diagnosis: import now fails closed unless the approved plan has revision, audience, owner, and visible storage, and it leaves `LastVerification` unset because `VerifyOutcome` belongs to Unit 3b.
+- Harness disposition: reused; no process was started.
+- Cleanup evidence: no durable state was created; the catalog service remains in-memory only.
+
+#### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 3.1–3.2 correction | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 0; 3 existing top-level tests passed | same focused command — exit 1; import accepted all four empty plan provenance fields and stamped `LastVerification` | same command — exit 0; 4 empty-field subtests reject with no entries/provenance and successful import leaves verification empty | happy import plus empty revision, audience, owner, and visible storage paths | extracted `completeCatalogPlan`; `gofmt` and focused tests passed |
+
+#### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 0; 4 top-level tests, including 4 required-provenance rejection subtests. |
+| Runtime harness | N/A — `CatalogService` remains a pure in-memory application service with no filesystem, SQLite, Git, or MCP boundary. |
+| Related regressions | `go test ./internal/app ./internal/domain ./internal/adapters/sqlite ./internal/adapters/mcp ./internal/adapters/git -count=1` — exit 0; 5 packages passed. |
+| Full/check-only | `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files. `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go` and `git diff --check` — exit 0/no output. |
+| Rollback boundary | Revert only the corrective hunks in `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, and this progress section; this restores the prior Unit 3a import behavior without touching Unit 3b persistence, MCP, or `VerifyOutcome`. |
+
+#### Delivery and Scope
+
+- Scope is limited to Catalog Import provenance validation and the deferred-verification boundary; assessments and existing treatment semantics are unchanged.
+- Tasks 3.1–3.2 remain correctly checked; no Unit 3b task is completed or modified.
+- Final child accounting against `7e2e0fb`: 268 additions + 6 deletions = 274 changed lines; no `size:exception` is claimed.
+- Correction actor churn is not reproducible: Unit 3a arrived as uncommitted parent work, so Git has no pre-correction tree. The final child remains below the 400-line limit.

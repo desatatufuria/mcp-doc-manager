@@ -111,6 +111,114 @@ func TestPlanningServiceAppliesPolicyAndActionBounds(t *testing.T) {
 	}
 }
 
+func TestCatalogServiceImportsApprovedInPlaceDocumentsWithLocalProvenance(t *testing.T) {
+	service := CatalogService{Clock: fixedPlanningClock}
+	plan := Plan{
+		State: domain.PlanApproved, Revision: "sha256:plan", VisibleStorage: "docs", Audience: "contributors", Owner: "docs-team",
+		ExistingDocuments: []ExistingDocumentTreatment{{Path: "docs/guide.md", Treatment: InPlaceInventory}},
+	}
+	result := service.Import(CatalogImportRequest{
+		Plan: plan, Actor: "local-user", Interaction: "mcp:import-catalog", Request: "request-import", IdempotencyKey: "key-import", Evidence: "sha256:repository",
+	})
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	want := domain.CatalogEntry{
+		Path: "docs/guide.md", Purpose: "existing_documentation", Audience: "contributors", Owner: "docs-team", RelatedAreas: []string{"docs"},
+		State: domain.CatalogImported, Evidence: "sha256:repository",
+	}
+	if !reflect.DeepEqual(result.Entries, []domain.CatalogEntry{want}) {
+		t.Fatalf("entries = %#v", result.Entries)
+	}
+	if len(result.Provenance) != 1 || result.Provenance[0].Operation != "catalog_import" || result.Provenance[0].Authority != domain.DeclaredLocalProvenance || result.Provenance[0].Validate() != nil {
+		t.Fatalf("provenance = %#v", result.Provenance)
+	}
+	if result.Entries[0].LastVerification != "" {
+		t.Fatalf("last verification = %q", result.Entries[0].LastVerification)
+	}
+}
+
+func TestCatalogServiceRejectsImportsMissingPlanProvenance(t *testing.T) {
+	service := CatalogService{Clock: fixedPlanningClock}
+	plan := Plan{
+		State: domain.PlanApproved, Revision: "sha256:plan", VisibleStorage: "docs", Audience: "contributors", Owner: "docs-team",
+		ExistingDocuments: []ExistingDocumentTreatment{{Path: "docs/guide.md", Treatment: InPlaceInventory}},
+	}
+	for _, field := range []string{"Revision", "Audience", "Owner", "VisibleStorage"} {
+		t.Run(field, func(t *testing.T) {
+			incomplete := plan
+			switch field {
+			case "Revision":
+				incomplete.Revision = ""
+			case "Audience":
+				incomplete.Audience = ""
+			case "Owner":
+				incomplete.Owner = ""
+			case "VisibleStorage":
+				incomplete.VisibleStorage = ""
+			}
+			result := service.Import(CatalogImportRequest{
+				Plan: incomplete, Actor: "local-user", Interaction: "mcp:import-catalog", Request: "request-import", IdempotencyKey: "key-import", Evidence: "sha256:repository",
+			})
+			if !errors.Is(result.Err, ErrCatalogEvidenceRequired) || len(result.Entries) != 0 || len(result.Provenance) != 0 {
+				t.Fatalf("result = %#v", result)
+			}
+		})
+	}
+}
+
+func TestCatalogServiceAssessesStaleUncertainAndOrphanEvidenceWithoutMutation(t *testing.T) {
+	service := CatalogService{}
+	entry := domain.CatalogEntry{Path: "docs/guide.md", State: domain.CatalogActive, Evidence: "sha256:old"}
+	for _, tt := range []struct {
+		name    string
+		input   CatalogAssessment
+		state   domain.CatalogState
+		result  domain.AuditResult
+		pending bool
+	}{
+		{"stale", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "repository evidence changed", Related: true}, domain.CatalogStale, domain.AuditUpdate, false},
+		{"uncertain", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "mapping is incomplete", Uncertain: true}, domain.CatalogUncertain, domain.AuditReview, false},
+		{"orphan", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "path is absent", Orphan: true}, domain.CatalogOrphan, domain.AuditOrphan, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := service.Assess(tt.input)
+			if got.Err != nil || got.Entry.State != tt.state || got.Audit.Result != tt.result || got.Audit.Evidence != tt.input.Evidence || got.Audit.Rationale != tt.input.Rationale {
+				t.Fatalf("assessment = %#v", got)
+			}
+			if tt.pending && (len(got.Entry.PendingActions) != 1 || got.Entry.PendingActions[0].State != domain.PendingOpen || got.Entry.PendingActions[0].Evidence != tt.input.Evidence) {
+				t.Fatalf("pending actions = %#v", got.Entry.PendingActions)
+			}
+		})
+	}
+}
+
+func TestCatalogServiceReportsOnlyEvidencedAuditTreatments(t *testing.T) {
+	service := CatalogService{}
+	entry := domain.CatalogEntry{Path: "docs/guide.md", State: domain.CatalogActive, Evidence: "sha256:old"}
+	for _, tt := range []struct {
+		name  string
+		input CatalogAssessment
+		want  domain.AuditResult
+	}{
+		{"update", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "related code changed", Related: true}, domain.AuditUpdate},
+		{"review", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "mapping is uncertain", Uncertain: true}, domain.AuditReview},
+		{"orphan", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "document path is absent", Orphan: true}, domain.AuditOrphan},
+		{"conflict", CatalogAssessment{Entry: entry, Evidence: "sha256:new", Rationale: "evidence conflicts", Conflicting: true}, domain.AuditConflict},
+		{"no action", CatalogAssessment{Entry: entry, Evidence: "sha256:old", Rationale: "no related change"}, domain.AuditNoAction},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := service.Assess(tt.input)
+			if got.Err != nil || got.Audit.State != domain.AuditReported || got.Audit.Result != tt.want || got.Audit.Evidence != tt.input.Evidence || got.Audit.Rationale != tt.input.Rationale {
+				t.Fatalf("assessment = %#v", got)
+			}
+		})
+	}
+	if got := service.Assess(CatalogAssessment{Entry: entry}); !errors.Is(got.Err, ErrCatalogEvidenceRequired) {
+		t.Fatalf("missing evidence = %#v", got)
+	}
+}
+
 type fakeRadiography struct {
 	report gitadapter.Radiography
 	err    error
