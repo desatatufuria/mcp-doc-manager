@@ -23,6 +23,13 @@ const maxOutput = 1 << 20
 
 type Resolver struct{ GitPath string }
 
+type rootBinding struct {
+	path string
+	info os.FileInfo
+}
+
+type rootBindingKey struct{}
+
 type Radiography struct {
 	Root          string
 	Identity      string
@@ -50,31 +57,52 @@ type OwnershipUncertainty struct {
 }
 
 func (r Resolver) ValidateRoot(ctx context.Context, root string) error {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return domain.ErrOutsideRepository
+	_, err := r.repositoryRoot(ctx, root)
+	return err
+}
+
+func (r Resolver) repositoryRoot(ctx context.Context, root string) (rootBinding, error) {
+	if !filepath.IsAbs(root) || root != filepath.Clean(root) {
+		return rootBinding{}, domain.ErrOutsideRepository
 	}
+	absRoot := filepath.Clean(root)
+	physicalRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil || physicalRoot != absRoot {
+		return rootBinding{}, domain.ErrOutsideRepository
+	}
+	info, err := os.Lstat(absRoot)
+	if err != nil || !info.IsDir() {
+		return rootBinding{}, domain.ErrOutsideRepository
+	}
+	binding := rootBinding{path: physicalRoot, info: info}
 	git := r.GitPath
 	if git == "" {
 		git = "git"
 	}
-	top, err := r.run(ctx, git, absRoot, "rev-parse", "--show-toplevel")
+	top, err := r.run(withRootBinding(ctx, binding), git, physicalRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
+		if errors.Is(err, domain.ErrOutsideRepository) {
+			return rootBinding{}, domain.ErrOutsideRepository
+		}
 		if errors.Is(err, domain.ErrOutputLimit) {
-			return domain.ErrOutputLimit
+			return rootBinding{}, domain.ErrOutputLimit
 		}
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return domain.ErrGitUnavailable
+			return rootBinding{}, domain.ErrGitUnavailable
 		}
-		if hasRepositoryChild(absRoot) {
-			return domain.ErrOutsideRepository
+		if hasRepositoryChild(physicalRoot) {
+			return rootBinding{}, domain.ErrOutsideRepository
 		}
-		return domain.ErrNotRepository
+		return rootBinding{}, domain.ErrNotRepository
 	}
-	if filepath.Clean(absRoot) != filepath.Clean(strings.TrimSpace(string(top))) {
-		return domain.ErrOutsideRepository
+	physicalTop, err := filepath.EvalSymlinks(filepath.Clean(strings.TrimSpace(string(top))))
+	if err != nil || physicalRoot != physicalTop {
+		return rootBinding{}, domain.ErrOutsideRepository
 	}
-	return nil
+	if err := sameRoot(binding); err != nil {
+		return rootBinding{}, err
+	}
+	return binding, nil
 }
 
 func (r Resolver) Resolve(ctx context.Context, root string, scope domain.Scope) (domain.Evidence, error) {
@@ -85,27 +113,12 @@ func (r Resolver) Resolve(ctx context.Context, root string, scope domain.Scope) 
 	if git == "" {
 		git = "git"
 	}
-	absRoot, err := filepath.Abs(root)
+	binding, err := r.repositoryRoot(ctx, root)
 	if err != nil {
-		return domain.Evidence{}, domain.ErrOutsideRepository
+		return domain.Evidence{}, err
 	}
-	top, err := r.run(ctx, git, absRoot, "rev-parse", "--show-toplevel")
-	if err != nil {
-		if errors.Is(err, domain.ErrOutputLimit) {
-			return domain.Evidence{}, domain.ErrOutputLimit
-		}
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return domain.Evidence{}, domain.ErrGitUnavailable
-		}
-		if hasRepositoryChild(absRoot) {
-			return domain.Evidence{}, domain.ErrOutsideRepository
-		}
-		return domain.Evidence{}, domain.ErrNotRepository
-	}
-	repoRoot := filepath.Clean(strings.TrimSpace(string(top)))
-	if filepath.Clean(absRoot) != repoRoot {
-		return domain.Evidence{}, domain.ErrOutsideRepository
-	}
+	ctx = withRootBinding(ctx, binding)
+	repoRoot := binding.path
 	resolvedScope := scope
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-prefix", "--name-only", "-z"}
 	var paths []string
@@ -242,14 +255,18 @@ func (r Resolver) canonicalIdentity(ctx context.Context, git, root string, scope
 }
 
 func (r Resolver) Radiograph(ctx context.Context, root string) (Radiography, error) {
-	if err := r.ValidateRoot(ctx, root); err != nil {
+	binding, err := r.repositoryRoot(ctx, root)
+	if err != nil {
 		return Radiography{}, err
 	}
 	git := r.GitPath
 	if git == "" {
 		git = "git"
 	}
-	repoRoot, _ := filepath.Abs(root)
+	return r.radiograph(withRootBinding(ctx, binding), git, binding.path)
+}
+
+func (r Resolver) radiograph(ctx context.Context, git, repoRoot string) (Radiography, error) {
 	raw, err := r.run(ctx, git, repoRoot, "ls-files", "-s", "-z")
 	if err != nil {
 		return Radiography{}, err
@@ -481,24 +498,51 @@ func (r Resolver) resolveRange(ctx context.Context, git, root, raw string) (stri
 }
 
 func (r Resolver) run(parent context.Context, git, root string, args ...string) ([]byte, error) {
+	if binding, ok := parent.Value(rootBindingKey{}).(rootBinding); ok {
+		if binding.path != root {
+			return nil, domain.ErrOutsideRepository
+		}
+		if err := sameRoot(binding); err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	gitPath, err := exec.LookPath(git)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, gitPath, append([]string{"-c", "core.attributesfile=/dev/null", "-c", "diff.external=", "-c", "diff.textconv=", "-C", root}, args...)...)
+	cmdArgs := append([]string{"-c", "core.attributesfile=/dev/null", "-c", "diff.external=", "-c", "diff.textconv=", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false", "-c", "credential.helper=", "-c", "core.hooksPath=/dev/null", "-C", root}, args...)
+	cmd := exec.CommandContext(ctx, gitPath, cmdArgs...)
 	cmd.Env = []string{
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
-		"GIT_TERMINAL_PROMPT=0", "GIT_EXTERNAL_DIFF=", "GIT_DIFF_OPTS=", "LC_ALL=C", "TZ=UTC",
+		"GIT_CONFIG_COUNT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false", "GIT_PAGER=cat", "GIT_EXTERNAL_DIFF=", "GIT_DIFF_OPTS=", "LC_ALL=C", "TZ=UTC",
 	}
 	out := &boundedBuffer{limit: maxOutput}
 	cmd.Stdout, cmd.Stderr = out, out
 	err = cmd.Run()
+	if binding, ok := parent.Value(rootBindingKey{}).(rootBinding); ok {
+		if rootErr := sameRoot(binding); rootErr != nil {
+			return nil, rootErr
+		}
+	}
 	if errors.Is(out.err, domain.ErrOutputLimit) {
 		return nil, domain.ErrOutputLimit
 	}
 	return out.Bytes(), err
+}
+
+func withRootBinding(ctx context.Context, binding rootBinding) context.Context {
+	return context.WithValue(ctx, rootBindingKey{}, binding)
+}
+
+func sameRoot(binding rootBinding) error {
+	info, err := os.Lstat(binding.path)
+	if err != nil || !info.IsDir() || !os.SameFile(binding.info, info) {
+		return domain.ErrOutsideRepository
+	}
+	return nil
 }
 
 type boundedBuffer struct {

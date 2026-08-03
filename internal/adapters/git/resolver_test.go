@@ -167,15 +167,7 @@ func TestResolverResolvesRootsAndScopes(t *testing.T) {
 	runGit(t, repo, "add", "staged file.txt")
 
 	resolver := Resolver{GitPath: "git"}
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relative, err := filepath.Rel(cwd, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, root := range []string{repo, filepath.Join(repo, "."), relative} {
+	for _, root := range []string{repo} {
 		t.Run(root, func(t *testing.T) {
 			evidence, err := resolver.Resolve(context.Background(), root, domain.Scope{Kind: domain.ScopeStaged})
 			if err != nil {
@@ -189,9 +181,20 @@ func TestResolverResolvesRootsAndScopes(t *testing.T) {
 	if err := runGitError(repo, "reset"); err != nil {
 		t.Fatal(err)
 	}
-	_, err = resolver.Resolve(context.Background(), repo, domain.Scope{Kind: domain.ScopeStaged})
+	_, err := resolver.Resolve(context.Background(), repo, domain.Scope{Kind: domain.ScopeStaged})
 	if !errors.Is(err, domain.ErrEmptyScope) {
 		t.Fatalf("empty staged error = %v, want ErrEmptyScope", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolver.Resolve(context.Background(), relative, domain.Scope{Kind: domain.ScopeStaged}); !errors.Is(err, domain.ErrOutsideRepository) {
+		t.Fatalf("relative root error = %v, want ErrOutsideRepository", err)
 	}
 }
 
@@ -206,6 +209,104 @@ func TestResolverRejectsOutsideAndNonRepositoryRoots(t *testing.T) {
 	_, err = resolver.Resolve(context.Background(), notRepo, domain.Scope{Kind: domain.ScopeWorktree})
 	if !errors.Is(err, domain.ErrNotRepository) {
 		t.Fatalf("non-repository error = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(repo, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "repo-link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, root := range []string{repo + "/sub/..", repo + "/.", filepath.Join(repo, "sub"), link} {
+		t.Run(root, func(t *testing.T) {
+			if _, err := resolver.Radiograph(context.Background(), root); !errors.Is(err, domain.ErrOutsideRepository) {
+				t.Fatalf("Radiograph(%q) error = %v, want ErrOutsideRepository", root, err)
+			}
+		})
+	}
+
+	if report, err := resolver.Radiograph(context.Background(), repo); err != nil || report.Root != repo {
+		t.Fatalf("Radiograph(%q) = %#v, %v", repo, report, err)
+	}
+}
+
+func TestResolverRadiographUsesReadOnlyGitCommands(t *testing.T) {
+	repo := newRepository(t)
+	write(t, filepath.Join(repo, "README.md"), "fixture\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "fixture")
+	write(t, filepath.Join(repo, "README.md"), "second\n")
+	runGit(t, repo, "commit", "-am", "second")
+	write(t, filepath.Join(repo, "README.md"), "staged\n")
+	runGit(t, repo, "add", "README.md")
+	commands := filepath.Join(t.TempDir(), "commands")
+	proxy := filepath.Join(t.TempDir(), "git-proxy")
+	write(t, proxy, "#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\\n' \"$*\" \"$GIT_CONFIG_NOSYSTEM\" \"$GIT_CONFIG_GLOBAL\" \"$GIT_CONFIG_SYSTEM\" \"$GIT_CONFIG_COUNT\" \"$GIT_OPTIONAL_LOCKS\" \"$GIT_NO_LAZY_FETCH\" \"$GIT_NO_REPLACE_OBJECTS\" \"$GIT_TERMINAL_PROMPT\" \"$GIT_PAGER\" \"$GIT_ASKPASS\" \"$GIT_EXTERNAL_DIFF\" \"$GIT_DIFF_OPTS\" \"$LC_ALL\" \"$TZ\" \"$GIT_CONFIG_KEY_0\" \"$GIT_CONFIG_VALUE_0\" \"$GIT_DIR\" \"$GIT_WORK_TREE\" \"$GIT_OBJECT_DIRECTORY\" \"$GIT_ALTERNATE_OBJECT_DIRECTORIES\" >> "+commands+"\nexec git \"$@\"\n")
+	if err := os.Chmod(proxy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker, poison, include := filepath.Join(t.TempDir(), "marker"), filepath.Join(t.TempDir(), "poison"), filepath.Join(t.TempDir(), "include")
+	write(t, poison, "#!/bin/sh\ntouch "+marker+"\n")
+	if err := os.Chmod(poison, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, include, "[core]\nfsmonitor = "+poison+"\n[filter \"poison\"]\nprocess = "+poison+"\n")
+	runGit(t, repo, "config", "include.path", include)
+	write(t, filepath.Join(repo, ".gitattributes"), "README.md filter=poison\n")
+	for key := range map[string]string{"GIT_CONFIG_KEY_0": "x", "GIT_CONFIG_VALUE_0": "poison", "GIT_DIR": "poison", "GIT_WORK_TREE": "poison", "GIT_OBJECT_DIRECTORY": "poison", "GIT_ALTERNATE_OBJECT_DIRECTORIES": "poison"} {
+		t.Setenv(key, "poison")
+	}
+	resolver := Resolver{GitPath: proxy}
+	for _, scope := range []domain.Scope{{Kind: domain.ScopeRange, Range: "HEAD~1..HEAD"}, {Kind: domain.ScopeInitial, Range: "HEAD"}, {Kind: domain.ScopeStaged}, {Kind: domain.ScopeWorktree}} {
+		if scope.Kind == domain.ScopeWorktree {
+			write(t, filepath.Join(repo, "README.md"), "worktree\n")
+		}
+		if _, err := resolver.Resolve(context.Background(), repo, scope); err != nil {
+			t.Fatalf("Resolve(%s): %v", scope.Kind, err)
+		}
+	}
+	if _, err := resolver.Radiograph(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	recorded, err := os.ReadFile(commands)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const args = "-c core.attributesfile=/dev/null -c diff.external= -c diff.textconv= -c core.fsmonitor=false -c core.untrackedCache=false -c maintenance.auto=false -c gc.auto=0 -c fetch.writeCommitGraph=false -c credential.helper= -c core.hooksPath=/dev/null -C "
+	const env = "1|/dev/null|/dev/null|0|0|1|1|0|cat|/bin/false|||C|UTC||||||"
+	seen := map[string]bool{}
+	for _, got := range strings.Split(strings.TrimSpace(string(recorded)), "\n") {
+		if !strings.HasPrefix(got, args+repo+" ") || !strings.HasSuffix(got, "|"+env) {
+			t.Fatalf("unsafe Git command = %q", got)
+		}
+		for _, operation := range []string{"rev-parse", "diff", "diff-tree", "log", "diff-index", "ls-files", "hash-object", "cat-file"} {
+			seen[operation] = seen[operation] || strings.Contains(strings.Split(got, "|")[0], " "+operation+" ")
+		}
+	}
+	for operation, found := range seen {
+		if !found {
+			t.Fatalf("missing Git operation %q", operation)
+		}
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repository config executed a helper: %v", err)
+	}
+}
+
+func TestResolverRejectsRootReplacementBeforeEvidence(t *testing.T) {
+	repo := newRepository(t)
+	write(t, filepath.Join(repo, "README.md"), "fixture\n")
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "fixture")
+	replacement := repo + "-replacement"
+	proxy := filepath.Join(t.TempDir(), "git-proxy")
+	write(t, proxy, "#!/bin/sh\ncase \"$*\" in *'ls-files -s'*) mv "+repo+" "+replacement+"; ln -s "+replacement+" "+repo+" ;; esac\nexec git \"$@\"\n")
+	if err := os.Chmod(proxy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (Resolver{GitPath: proxy}).Radiograph(context.Background(), repo); !errors.Is(err, domain.ErrOutsideRepository) {
+		t.Fatalf("Radiograph replacement error = %v, want ErrOutsideRepository", err)
 	}
 }
 

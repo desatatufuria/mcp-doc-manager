@@ -227,3 +227,28 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Ownership boundary: portability permits proof of non-symlink directories and no group/world write bits; this implementation deliberately does not claim UID ownership validation.
 - Remaining risk: no Unit 2/3 use case, MCP tool, catalog behavior, audit, radiography, planning, or `VerifyOutcome` wiring is implemented.
 - Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, shared phase protocol, and OpenSpec convention.
+
+## Unit 2a2.1a Safe Git Execution & Root Binding (Strict TDD)
+### Result Contract
+- Outcome: passed; native token `sha256:fb224e6a938a2c1e6b8f9342ad689d597fb377d95afac8d3b0f8a15608377e49` was neither acquired, reset, nor settled.
+- Work unit: `unit-2a2-1a-safe-git-root-binding`; correction actor limit: 180 lines; historical actor receipt from baseline tree `3aeb41751f67bbaf3b8227b01f426a10f991cc91` to receipt tree `fed031ae79c9d66d058e4ec8ad5fe7d8bb08fe45` is 271 changed lines.
+- Portable correction churn from receipt tree `fed031ae79c9d66d058e4ec8ad5fe7d8bb08fe45` to pre-evidence-correction code/test candidate tree `15166a7275f20ea2eda5d9fefd3fb10317c408e6` is 62 additions + 25 deletions = 87 changed lines.
+- Diagnosis: every Resolver/Radiograph Git invocation crosses `run`, which clears inherited environment and fixes safe config/arguments; `Lstat` plus `SameFile` revalidates the bound root before/after commands and rejects a replacement symlink to the original inode. A swap-and-restore wholly during one Git command is explicitly outside this portable local-tool model.
+### Strict-TDD Cycle Evidence
+| Task | Test file/layer | Safety net | RED | GREEN / triangulate | Refactor |
+|---|---|---|---|---|---|
+| 2.4 | `resolver_test.go` / real-Git integration | `go test ./internal/adapters/git -count=1` — exit 0 | symlink replacement during `ls-files` returned nil instead of `ErrOutsideRepository` | exit 0: relative, traversal, dot, subdir, symlink, renamed-root, and replacement-symlink failures | root binding helper; gofmt exit 0 |
+| 2.5 | `resolver_test.go` / boundary integration | same | proxy test failed: credential/helper-safe `-c` arguments were absent | exit 0: range, initial, staged, worktree, inventory, and digest operations record exact args and isolated env | one centralized boundary; gofmt exit 0 |
+| 2.6 | OpenSpec evidence | N/A | N/A | focused, resolver, compatibility, full, format/check, and accounting pass | N/A |
+### Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Focused test / runtime harness | `go test ./internal/adapters/git -run 'TestResolver(RadiographUsesReadOnlyGitCommands|RejectsRootReplacementBeforeEvidence)$' -count=1 -v` — exit 0; 2 top-level tests. The proxy covers range, initial, staged, worktree, inventory, and digest calls; replacement-symlink returns no evidence. |
+| Resolver / compatibility | `go test ./internal/adapters/git -count=1`; `go test ./internal/app ./internal/adapters/mcp -count=1` — exit 0; all three packages passed. |
+| Full / check-only | `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files. `gofmt -l internal/adapters/git/resolver.go internal/adapters/git/resolver_test.go` and `git diff --check` — exit 0/no output. |
+| Safe-boundary proof | Exact proxy records the fixed `-c` list and complete controlled environment; poisoned injected config/Git directory variables are absent. Repository-local included fsmonitor/filter helpers do not execute; used plumbing has no hook invocation path. |
+| Rollback | Revert only `internal/adapters/git/resolver.go`, `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/design.md`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and this cumulative `apply-progress.md` section; this removes safe Git/root binding without changing Unit 2a1 inventory/classification. |
+### Delivery and Deferred Scope
+- Feature-chain slice: `fix/living-documentation-lifecycle-02a2-git-safety` → `feat/living-documentation-lifecycle-02-radiography`; no `size:exception`; pre-evidence-correction code/test candidate tree `15166a7275f20ea2eda5d9fefd3fb10317c408e6` against `878aa1f` is 275 additions + 83 deletions = 358 changes across the final five-file rollback boundary, within the 400-line maximum. Growth from the old 321-line publication receipt to the corrected 358-line receipt is 37 lines of net publication receipt growth, not actor or correction churn.
+- Tasks 2.7–2.9 retain linked-worktree snapshots, alternate object stores, symlink targets, hooks/config/index/object fingerprints, and actual before/after Radiograph oracle. Tasks 2.10 onward remain deferred.
+- Skill resolution: paths-injected — sdd-apply, strict-tdd, go-testing, work-unit-commits, chained-pr, and shared phase protocol; CodeGraph query reported this worktree unindexed.
