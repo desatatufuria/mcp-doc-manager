@@ -54,8 +54,8 @@ func TestMCPStdioDocumentChangeAndReceipt(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"document_change", "verify_receipt"}) {
-		t.Fatalf("MCP tools = %v; mutation-capable lifecycle tools must not be exposed", names)
+	if !reflect.DeepEqual(names, []string{"document_change", "propose_plan", "radiograph", "verify_receipt"}) {
+		t.Fatalf("MCP tools = %v; only read-only lifecycle staging tools may be exposed", names)
 	}
 	result := callMCP(t, ctx, session, "document_change", map[string]any{"repository": repo, "scope": map[string]any{"kind": "staged", "range": ""}})
 	raw, err := json.Marshal(result.StructuredContent)
@@ -114,6 +114,96 @@ func TestMCPDocumentChangeRequiresWorkspaceInitialization(t *testing.T) {
 	_, output, err = documentChange(context.Background(), nil, scopeInput{Repository: repo, Scope: domain.Scope{Kind: domain.ScopeStaged}})
 	if err != nil || output.Report == nil {
 		t.Fatalf("after install = %#v, %v", output, err)
+	}
+}
+
+func TestMCPStdioRadiographyToPlanWithoutVisibleWrites(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping MCP stdio integration test in short mode")
+	}
+	repo := mcpRepository(t)
+	writeMCP(t, filepath.Join(repo, "README.md"), "before\n")
+	mcpGit(t, repo, "add", "README.md")
+	mcpGit(t, repo, "commit", "-m", "initial")
+	before, err := os.ReadFile(filepath.Join(repo, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusBefore := mcpGitOutput(t, repo, "status", "--porcelain=v1", "-z")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-plan-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: exec.Command("go", "run", "../../../cmd/docmanager", "mcp")}, nil)
+	if err != nil {
+		t.Fatalf("connect stdio server: %v", err)
+	}
+	defer session.Close()
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list MCP tools: %v", err)
+	}
+	names := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+	}
+	sort.Strings(names)
+	if !reflect.DeepEqual(names, []string{"document_change", "propose_plan", "radiograph", "verify_receipt"}) {
+		t.Fatalf("MCP tools = %v", names)
+	}
+
+	radiographyResult := callMCP(t, ctx, session, "radiograph", map[string]any{"repository": repo})
+	raw, err := json.Marshal(radiographyResult.StructuredContent)
+	if err != nil {
+		t.Fatalf("encode radiography output: %v", err)
+	}
+	var radiographyOutput toolOutput
+	if err := json.Unmarshal(raw, &radiographyOutput); err != nil {
+		t.Fatalf("decode radiography output: %v", err)
+	}
+	if radiographyOutput.Radiography == nil || radiographyOutput.Radiography.Identity == "" || len(radiographyOutput.Radiography.Documentation) != 1 || radiographyOutput.Radiography.Documentation[0].Path != "README.md" || radiographyOutput.Radiography.Documentation[0].Digest == "" || radiographyOutput.Radiography.Documentation[0].Classification != "uncertain" || radiographyOutput.Radiography.Documentation[0].Evidence != "maintenance_evidence_absent" {
+		t.Fatalf("radiography = %#v", radiographyOutput.Radiography)
+	}
+
+	planResult := callMCP(t, ctx, session, "propose_plan", map[string]any{
+		"repository": repo, "visible_storage": ".", "audience": "contributors", "language": "en", "owner": "docs-team",
+		"confirmed": true, "plan_approved": true, "batch_approved": true, "policy_approved": true,
+		"policy": "approval-required", "actions": []map[string]any{{"path": "README.md", "kind": "update", "structural": false}},
+		"actor": "local-user", "interaction": "mcp:plan", "request": "request-1", "idempotency_key": "key-1",
+	})
+	raw, err = json.Marshal(planResult.StructuredContent)
+	if err != nil {
+		t.Fatalf("encode plan output: %v", err)
+	}
+	var planOutput toolOutput
+	if err := json.Unmarshal(raw, &planOutput); err != nil {
+		t.Fatalf("decode plan output: %v", err)
+	}
+	if planOutput.Planning == nil || planOutput.Planning.Err != nil || planOutput.Planning.Plan.State != domain.PlanApproved || planOutput.Planning.Authorization == nil || !reflect.DeepEqual(planOutput.Planning.Plan.ExistingDocuments, []app.ExistingDocumentTreatment{{Path: "README.md", Treatment: app.InPlaceInventory}}) {
+		t.Fatalf("plan = %#v", planOutput.Planning)
+	}
+
+	failed, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "propose_plan", Arguments: map[string]any{
+		"repository": repo, "visible_storage": ".", "audience": "contributors", "language": "en", "owner": "docs-team",
+		"confirmed": true, "plan_approved": true, "batch_approved": false, "policy_approved": true, "policy": "automatic-after-approved-plan",
+		"actions": []map[string]any{{"path": "README.md", "kind": "move", "structural": true}},
+		"actor":   "local-user", "interaction": "mcp:plan", "request": "request-2", "idempotency_key": "key-2",
+	}})
+	if err != nil || !failed.IsError {
+		t.Fatalf("unapproved structural plan = %#v, %v", failed, err)
+	}
+	if text, ok := failed.Content[0].(*mcp.TextContent); !ok || text.Text != `{"error":"planning_denied"}` {
+		t.Fatalf("unapproved structural plan failure = %#v", failed.Content)
+	}
+	if after, err := os.ReadFile(filepath.Join(repo, "README.md")); err != nil || string(after) != string(before) {
+		t.Fatalf("documentation mutated: %q, %v", after, err)
+	}
+	if statusAfter := mcpGitOutput(t, repo, "status", "--porcelain=v1", "-z"); statusAfter != statusBefore {
+		t.Fatalf("Git status mutated: before %q after %q", statusBefore, statusAfter)
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".docmanager")); !os.IsNotExist(err) {
+		t.Fatalf("MCP plan persisted lifecycle state: %v", err)
 	}
 }
 

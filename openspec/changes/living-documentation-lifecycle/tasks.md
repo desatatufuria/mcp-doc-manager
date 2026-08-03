@@ -97,7 +97,7 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 ## Unit 2c: MCP Staging (base=completed 2b)
 
-- [ ] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
+- [x] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
 
 ## Unit 3: Catalog (base=completed 2c)
 

@@ -395,3 +395,34 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 
 - Correction actor baseline: unavailable; the parent supplied no correction baseline tree, so actor churn cannot be calculated truthfully.
 - Final child accounting against `ac7e012`: 349 additions + 2 deletions = 351 changed lines, within the 400-line ceiling.
+
+## Unit 2c MCP Staging (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. MCP now exposes read-only `radiograph` and unpersisted `propose_plan` tools, wiring the Unit 2b planning service through stdio without visible writes or lifecycle persistence.
+- Parent-supplied native runtime acquire state: `proceed`; token `sha256:f007d42a0b6d63c94b59e252dcf3875d211cc0351978eadea3376ca0baad4431` was not acquired, reset, or settled by this child.
+- Work unit: `unit-2c-mcp-staging`; feature-branch-chain child starts at immediate parent PR #12 commit `4e0d959`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.18 | `internal/adapters/mcp/mcp_test.go` / MCP stdio integration | `go test ./internal/adapters/mcp -count=1` — exit 0; package passed | `go test ./internal/adapters/mcp -run 'TestMCPStdioRadiographyToPlanWithoutVisibleWrites' -count=1 -v` — exit 1; `toolOutput.Radiography` and `toolOutput.Planning` undefined | same focused command — exit 0; stdio radiography→approved bounded plan and denied structural plan passed | confirmed radiography/in-place inventory plus unapproved automatic structural action denial; both preserve README, Git status, and absent `.docmanager` | `gofmt -w internal/adapters/mcp/mcp.go internal/adapters/mcp/mcp_test.go`; focused MCP stdio tests exit 0 |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/adapters/mcp -run 'TestMCP(StdioDocumentChangeAndReceipt|StdioRadiographyToPlanWithoutVisibleWrites)' -count=1 -v` — exit 0; 2 stdio MCP tests passed. |
+| Runtime harness | Same focused command — exit 0; launches `go run ../../../cmd/docmanager mcp`, lists staged tools, exercises real temporary Git radiography→plan and denied structural conflict, and proves README/Git status unchanged with no `.docmanager` directory. |
+| Planning and resolver regressions | `go test ./internal/app -run 'TestPlanningService' -count=1 -v`; `go test ./internal/adapters/git -count=1` — exit 0; 4 planning tests with 3 nested policy/action tests and the resolver package passed. |
+| Domain/SQLite compatibility | `go test ./internal/domain ./internal/adapters/sqlite -count=1` — exit 0; 2 packages passed. |
+| Full/check-only | `go test ./...`; `gofmt -l internal/adapters/mcp/mcp.go internal/adapters/mcp/mcp_test.go`; `git diff --check` — exit 0; full suite passed and formatting/check produced no output. |
+| Rollback boundary | Revert only `internal/adapters/mcp/mcp.go`, `internal/adapters/mcp/mcp_test.go`, task 2.18, and this cumulative progress section; this removes MCP planning staging while preserving Unit 2b and all Unit 3 catalog/verification work remains absent. |
+
+### Delivery and Scope
+
+- Tools added: `radiograph` and `propose_plan`; `propose_plan` uses the completed `app.PlanningService`, preserves its bounded actions, denial semantics, and declared-local provenance, and has no SQLite/authoring path.
+- Unit 3 catalog, persistence, audit, authorization verification, and idempotency behavior remain unimplemented.
+- Exact child accounting against `4e0d959`: 186 additions + 7 deletions = 193 changed lines; this is within the 400-line ceiling.
