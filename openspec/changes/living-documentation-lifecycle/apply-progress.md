@@ -344,3 +344,54 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Exact child accounting against `0a53039`: 174 additions + 3 deletions = 177 changed lines, within the 400-line ceiling.
 - Changed paths are limited to `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and this cumulative progress artifact.
 - No Unit 2b or later work was implemented.
+
+## Unit 2b Planning Service (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. The planning service creates an unpersisted, radiography-bound plan, policy, batch, authorization, and declared-local provenance; it does not author visible files.
+- Parent-owned native token `sha256:7a09a69a11e3547b37823e61c1e63709c2a30dce82a3f23325519c1b57a26b32` was neither acquired, reset, nor settled.
+- Work unit: `unit-2b-planning-service`; feature-branch-chain child targets immediate parent PR #11 commit `ac7e012`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.16 | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app -count=1` — exit 0; package passed | `go test ./internal/app -run 'TestPlanningService' -count=1` — exit 1; `PlanningService`, request, policy, and denial symbols undefined | focused command — exit 0; 4 top-level tests and 3 policy/action subtests passed | confirmed radiography, two denial paths, automatic content actions, approved/unapproved structural actions, and in-place inventory treatment | `gofmt -w`; focused pass |
+| 2.17 | `internal/app/lifecycle_service.go` / unit | same package baseline | task 2.16 missing-service RED gate | focused command — exit 0; radiography identity binds plan, batch, policy, authorization, and provenance | approval-required versus automatic policy plus structural-action approval boundary | compact pure validation helpers; focused pass |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestPlanningService' -count=1 -v` — exit 0; 4 top-level tests and 3 nested policy/action subtests passed. |
+| Runtime harness | `go test ./internal/app -run 'TestPlanningService' -count=1 -v` — exit 0; service invokes its radiography boundary and produces only in-memory planning results. No visible-write boundary exists in this service. |
+| Related regressions | `go test ./internal/app ./internal/domain ./internal/adapters/sqlite -count=1`; `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/mcp -count=1` — all exit 0. |
+| Full / checks | `go test ./...`; `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; `git diff --check` — all exit 0; full suite passed 9 tested packages and `assets` had no test files. |
+| Rollback boundary | Revert only `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, tasks 2.16–2.17 checkboxes, and this cumulative progress section; 2a2.2 resolver safety and all MCP/catalog work remain intact. |
+
+### Delivery and Scope
+
+- Changed-line accounting against `ac7e012`: recorded in the corrective rerun below.
+- Changed paths are limited to the planning service/test and required OpenSpec task/progress evidence.
+- Unit 2c MCP staging and Unit 3 catalog work remain unimplemented.
+
+### Gatekeeper Corrective Rerun: Existing-Document Treatment
+
+- Outcome: passed. Every discovered document is represented by an explicit `in_place_inventory` treatment, including a confirmed plan with no content actions.
+- Parent-owned correction token `sha256:fe29ef72ed17623f3ed5e3641db51ad846fc3e0767abd9ef82d26da55eb34f69` was neither acquired, reset, nor settled.
+- Scope: Unit 2b only; no authoring, persistence, MCP staging, or catalog behavior was added.
+
+| Task | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 2.16–2.17 correction | `go test ./internal/app -run 'TestPlanningServiceTreatsExistingDocumentsInPlaceWithoutContentAction' -count=1 -v` — exit 1; `ExistingDocumentTreatment` and `InPlaceInventory` undefined | same test — exit 0; one test passed after the minimal in-place treatment model and zero-action validation | `gofmt -w internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; focused suite exit 0 |
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestPlanningService' -count=1 -v` — exit 0; 4 top-level tests and 3 nested policy/action subtests passed. |
+| Runtime harness | Same focused command — exit 0; fake radiography produces in-memory planning results only; no visible-write or persistence boundary exists. |
+| Related/full/check | `go test ./internal/app ./internal/domain ./internal/adapters/sqlite -count=1`; `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/mcp -count=1`; `go test ./...`; `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; `git diff --check` — all exit 0. |
+| Rollback boundary | Revert `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, and this Unit 2b evidence; it removes only planning-service in-place treatment and preserves prior 2a2.2 work. |
+
+- Correction actor baseline: unavailable; the parent supplied no correction baseline tree, so actor churn cannot be calculated truthfully.
+- Final child accounting against `ac7e012`: 349 additions + 2 deletions = 351 changed lines, within the 400-line ceiling.

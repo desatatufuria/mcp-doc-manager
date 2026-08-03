@@ -92,8 +92,8 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 ## Unit 2b: Planning Service (base=completed 2a2.2)
 
-- [ ] 2.16 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
-- [ ] 2.17 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
+- [x] 2.16 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
+- [x] 2.17 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
 
 ## Unit 2c: MCP Staging (base=completed 2b)
 
