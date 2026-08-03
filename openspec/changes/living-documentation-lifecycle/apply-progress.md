@@ -311,3 +311,36 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Snapshot identity binds worktree bytes/modes (excluding separately-bound `.git`), git-dir, common-dir, index, config, hooks, primary/alternate object-store trees, and `.docmanager`; any symlink, special file, or missing/read-error path fails closed.
 - Exact child accounting against `2045995`: 249 additions + 4 deletions = 253 changed lines, within the 400-line ceiling; paths are limited to this test, task checkboxes, and cumulative evidence.
 - No later stage/scope tasks were implemented.
+
+## Unit 2a2.2 Stage & Scope Safety (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. Test-only scope snapshots prove that resolving unmerged staged, staged, unborn, initial, empty-index, and `commit -a` repositories does not mutate the complete repository state.
+- Parent-owned native token `sha256:372dbb557d581b24b63ae65f33a40a6474e9e052c6cd4590e34db0abcd25e232` was neither acquired, reset, nor settled.
+- Work unit: `unit-2a2-2-stage-safety`; feature-branch-chain child targets its immediate 2a2.1c parent, never `main`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.13 | `resolver_test.go` / real-Git integration | `go test ./internal/adapters/git -count=1` — exit 0; package passed | focused command — exit 1; `assertScopePreservesSnapshot` undefined | focused command — exit 0; unmerged staged identity, `README.md` output, and missing stage blob digest asserted | ordinary staged case proves the separate normal-index path | `gofmt -w`; focused pass |
+| 2.14 | `resolver_test.go` / real-Git integration | same package baseline | same missing-helper RED gate | focused command — exit 0; staged, unborn, initial, empty-index, and `commit -a` results match their exact success/error contracts | six real repository states each bind before/after snapshots | no production refactor needed; gofmt pass |
+| 2.15 | OpenSpec artifacts / evidence | N/A | N/A | receipts, checks, and accounting below | N/A | N/A |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/adapters/git -run 'TestResolverScopeSnapshotsPreserveStageAndScopeScenarios' -count=1 -v` — exit 0; 1 top-level test and 6 scenario subtests passed. |
+| Runtime harness | Same focused command — exit 0; creates real repositories, including a merge-conflicted index and an unborn repository, snapshots full state before/after `Resolve`, and asserts each scope result. |
+| Resolver regression | `go test ./internal/adapters/git -count=1` — exit 0; package passed. |
+| App/MCP compatibility | `go test ./internal/app ./internal/adapters/mcp -count=1` — exit 0; both packages passed. |
+| Full / format / check | `go test ./...`; `gofmt -w internal/adapters/git/resolver_test.go`; `git diff --check` — all exit 0; full suite passed 9 tested packages and `assets` had no test files. |
+| Rollback boundary | Revert only the stage/scope snapshot test, tasks 2.13–2.15 checkboxes, and this cumulative progress section; production `Resolver` semantics and 2a2.1c oracle remain intact. |
+
+### Delivery and Scope
+
+- Exact child accounting against `0a53039`: 174 additions + 3 deletions = 177 changed lines, within the 400-line ceiling.
+- Changed paths are limited to `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and this cumulative progress artifact.
+- No Unit 2b or later work was implemented.

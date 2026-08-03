@@ -86,9 +86,9 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 ## Unit 2a2.2: Stage & Scope Safety (base=completed 2a2.1c oracle)
 
-- [ ] 2.13 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
-- [ ] 2.14 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
-- [ ] 2.15 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
+- [x] 2.13 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
+- [x] 2.14 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
+- [x] 2.15 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
 
 ## Unit 2b: Planning Service (base=completed 2a2.2)
 

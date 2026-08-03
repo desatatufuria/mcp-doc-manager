@@ -573,6 +573,144 @@ func TestRadiographSnapshotOracleBindsEveryFieldAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestResolverScopeSnapshotsPreserveStageAndScopeScenarios(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T) (string, domain.Scope)
+		check func(*testing.T, domain.Evidence, error)
+	}{
+		{
+			name: "unmerged staged identity and output",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "base\n")
+				runGit(t, repo, "add", "README.md")
+				runGit(t, repo, "commit", "-m", "base")
+				base := strings.TrimSpace(gitOutput(t, repo, "branch", "--show-current"))
+				runGit(t, repo, "checkout", "-b", "topic")
+				write(t, filepath.Join(repo, "README.md"), "topic\n")
+				runGit(t, repo, "commit", "-am", "topic")
+				runGit(t, repo, "checkout", base)
+				write(t, filepath.Join(repo, "README.md"), "main\n")
+				runGit(t, repo, "commit", "-am", "main")
+				if err := runGitError(repo, "merge", "topic"); err == nil {
+					t.Fatal("merge conflict setup unexpectedly succeeded")
+				}
+				return repo, domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) || evidence.DocumentationDigests["README.md"] != "missing" {
+					t.Fatalf("unmerged staged evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "staged",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := scopeRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "staged\n")
+				runGit(t, repo, "add", "README.md")
+				return repo, domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) {
+					t.Fatalf("staged evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "unborn",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "unborn\n")
+				runGit(t, repo, "add", "README.md")
+				return repo, domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if !errors.Is(err, domain.ErrContentRead) || evidence.Identity != "" || len(evidence.ChangedPaths) != 0 || len(evidence.DocumentationDigests) != 0 {
+					t.Fatalf("unborn staged result = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "initial",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "initial\n")
+				runGit(t, repo, "add", "README.md")
+				runGit(t, repo, "commit", "-m", "initial")
+				return repo, domain.Scope{Kind: domain.ScopeInitial, Range: "HEAD"}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) {
+					t.Fatalf("initial evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "empty index",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				return scopeRepository(t), domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if !errors.Is(err, domain.ErrEmptyScope) || evidence.Identity != "" || len(evidence.ChangedPaths) != 0 || len(evidence.DocumentationDigests) != 0 {
+					t.Fatalf("empty index result = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "commit a",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "before\n")
+				runGit(t, repo, "add", "README.md")
+				runGit(t, repo, "commit", "-m", "before")
+				write(t, filepath.Join(repo, "README.md"), "after\n")
+				runGit(t, repo, "commit", "-am", "after")
+				return repo, domain.Scope{Kind: domain.ScopeInitial, Range: "HEAD"}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) {
+					t.Fatalf("commit -a initial evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, scope := test.setup(t)
+			assertScopePreservesSnapshot(t, repo, scope, test.check)
+		})
+	}
+}
+
+func assertScopePreservesSnapshot(t *testing.T, repo string, scope domain.Scope, check func(*testing.T, domain.Evidence, error)) {
+	t.Helper()
+	resolver := Resolver{GitPath: "git"}
+	paths, err := resolver.radiographPaths(context.Background(), "git", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := snapshotRadiograph(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, resolveErr := resolver.Resolve(context.Background(), repo, scope)
+	after, err := snapshotRadiograph(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("Resolve(%#v) changed repository state: before %s after %s", scope, before, after)
+	}
+	check(t, evidence, resolveErr)
+}
+
 func snapshotRadiograph(root string, paths radiographPathSet) (string, error) {
 	var canonical bytes.Buffer
 	writeField := func(values ...string) {
