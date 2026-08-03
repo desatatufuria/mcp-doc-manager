@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -21,6 +22,32 @@ import (
 const maxOutput = 1 << 20
 
 type Resolver struct{ GitPath string }
+
+type Radiography struct {
+	Root          string
+	Identity      string
+	Documentation []DocumentationEvidence
+	Exclusions    []Exclusion
+	Ownership     OwnershipUncertainty
+}
+
+type DocumentationEvidence struct {
+	Path           string
+	Digest         string
+	Classification string
+	Evidence       string
+}
+
+type Exclusion struct {
+	Path     string
+	Reason   string
+	Evidence string
+}
+
+type OwnershipUncertainty struct {
+	Uncertain bool
+	Reason    string
+}
 
 func (r Resolver) ValidateRoot(ctx context.Context, root string) error {
 	absRoot, err := filepath.Abs(root)
@@ -54,13 +81,13 @@ func (r Resolver) Resolve(ctx context.Context, root string, scope domain.Scope) 
 	if err := scope.Validate(); err != nil {
 		return domain.Evidence{}, err
 	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return domain.Evidence{}, domain.ErrOutsideRepository
-	}
 	git := r.GitPath
 	if git == "" {
 		git = "git"
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return domain.Evidence{}, domain.ErrOutsideRepository
 	}
 	top, err := r.run(ctx, git, absRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -212,6 +239,143 @@ func (r Resolver) canonicalIdentity(ctx context.Context, git, root string, scope
 	default:
 		return nil, domain.ErrUnsupportedRequest
 	}
+}
+
+func (r Resolver) Radiograph(ctx context.Context, root string) (Radiography, error) {
+	if err := r.ValidateRoot(ctx, root); err != nil {
+		return Radiography{}, err
+	}
+	git := r.GitPath
+	if git == "" {
+		git = "git"
+	}
+	repoRoot, _ := filepath.Abs(root)
+	raw, err := r.run(ctx, git, repoRoot, "ls-files", "-s", "-z")
+	if err != nil {
+		return Radiography{}, err
+	}
+	entries := map[string]inventoryEntry{}
+	for _, rawEntry := range bytes.Split(raw, []byte{0}) {
+		parts := bytes.SplitN(rawEntry, []byte{'\t'}, 2)
+		fields := bytes.Fields(parts[0])
+		if len(parts) == 2 && len(fields) >= 2 {
+			entries[string(parts[1])] = inventoryEntry{mode: string(fields[0]), objectID: string(fields[1]), tracked: true}
+		}
+	}
+	untracked, err := r.run(ctx, git, repoRoot, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return Radiography{}, err
+	}
+	for _, rawPath := range bytes.Split(untracked, []byte{0}) {
+		file := string(rawPath)
+		if file != "" {
+			entries[file] = inventoryEntry{mode: "untracked"}
+		}
+	}
+	files := make([]string, 0, len(entries))
+	for file := range entries {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	report := Radiography{Root: repoRoot, Ownership: OwnershipUncertainty{Uncertain: true, Reason: "ownership_not_inferred_from_repository_evidence"}}
+	for _, file := range files {
+		entry := entries[file]
+		reason, evidence := radiographyExclusion(file, entry.mode)
+		if reason != "" {
+			report.Exclusions = append(report.Exclusions, Exclusion{Path: file, Reason: reason, Evidence: evidence})
+			continue
+		}
+		if !isDocumentationPath(file) {
+			continue
+		}
+		digest := ""
+		if entry.tracked {
+			content, err := r.run(ctx, git, repoRoot, "cat-file", "blob", entry.objectID)
+			if err != nil {
+				return Radiography{}, fmt.Errorf("read radiography documentation: %w", domain.ErrContentRead)
+			}
+			sum := sha256.Sum256(content)
+			digest = "sha256:" + hex.EncodeToString(sum[:])
+		}
+		classification, source := documentationClassification(file)
+		if !entry.tracked {
+			classification, source = "uncertain", "untracked_content_not_read"
+		}
+		report.Documentation = append(report.Documentation, DocumentationEvidence{Path: file, Digest: digest, Classification: classification, Evidence: source})
+	}
+	report.Identity = radiographyIdentity(repoRoot, report.Ownership, entries, report.Documentation, report.Exclusions)
+	return report, nil
+}
+
+type inventoryEntry struct {
+	mode, objectID string
+	tracked        bool
+}
+
+func radiographyExclusion(file, mode string) (string, string) {
+	lower := strings.ToLower(file)
+	base := strings.ToLower(path.Base(file))
+	if !safeInventoryPath(file) || mode == "unavailable" {
+		return "unsafe_path", "path_not_safe_to_read"
+	}
+	if base == "requirements.txt" || base == "cmakelists.txt" || base == "readme.sh" || (!strings.HasSuffix(base, ".md") && !strings.HasSuffix(base, ".mdx")) {
+		return "non_documentation_path", "path_extension_or_known_non_documentation_name"
+	}
+	if strings.HasPrefix(mode, "120") || strings.HasPrefix(mode, "L") {
+		return "symlink_documentation", "symlink_mode"
+	}
+	for _, component := range strings.Split(lower, "/") {
+		if component == "vendor" || component == "generated" || component == "gen" {
+			return "generated_or_vendor", "generated_or_vendor_directory"
+		}
+	}
+	if strings.HasPrefix(mode, "1007") || strings.HasPrefix(mode, "1005") || strings.Contains(mode, "x") {
+		return "executable_documentation", "executable_mode"
+	}
+	return "", ""
+}
+
+func safeInventoryPath(file string) bool {
+	clean := path.Clean(file)
+	return file != "" && !filepath.IsAbs(file) && !path.IsAbs(file) && !strings.Contains(file, "\x00") && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+func isDocumentationPath(file string) bool {
+	lower := strings.ToLower(path.Base(file))
+	return strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".mdx")
+}
+func documentationClassification(file string) (string, string) {
+	if strings.Contains(strings.ToLower(path.Base(file)), ".generated.") {
+		return "uncertain", "generated_name_heuristic"
+	}
+	return "uncertain", "maintenance_evidence_absent"
+}
+
+func radiographyIdentity(root string, ownership OwnershipUncertainty, entries map[string]inventoryEntry, documentation []DocumentationEvidence, exclusions []Exclusion) string {
+	files := make([]string, 0, len(entries))
+	for file := range entries {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	var canonical bytes.Buffer
+	write := func(values ...string) {
+		for _, value := range values {
+			canonical.WriteString(value)
+			canonical.WriteByte(0)
+		}
+	}
+	write(root, fmt.Sprintf("%t", ownership.Uncertain), ownership.Reason)
+	for _, file := range files {
+		entry := entries[file]
+		write(file, entry.mode, entry.objectID, fmt.Sprintf("%t", entry.tracked))
+	}
+	for _, document := range documentation {
+		write("documentation", document.Path, document.Digest, document.Classification, document.Evidence)
+	}
+	for _, exclusion := range exclusions {
+		write("exclusion", exclusion.Path, exclusion.Reason, exclusion.Evidence)
+	}
+	sum := sha256.Sum256(canonical.Bytes())
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func (r Resolver) resolveInitial(ctx context.Context, git, root, raw string) (string, error) {

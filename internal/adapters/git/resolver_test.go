@@ -6,11 +6,154 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
+
+func TestResolverRadiographsDocumentationWithExplicitExclusions(t *testing.T) {
+	repo := newRepository(t)
+	files := map[string]string{
+		"docs/guide.md":          "maintained\n",
+		"README.md":              "uncertain\n",
+		"docs/generated/api.md":  "generated\n",
+		"docs/api.generated.mdx": "generated\n",
+		"vendor/guide.md":        "vendor\n",
+		"requirements.txt":       "dependency\n",
+		"CMakeLists.txt":         "project()\n",
+		"README.sh":              "#!/bin/sh\n",
+		"docs/executable.mdx":    "#!/bin/sh\n",
+	}
+	for path, content := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(repo, path), content)
+	}
+	if err := os.Chmod(filepath.Join(repo, "docs/executable.mdx"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("guide.md", filepath.Join(repo, "docs", "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+	write(t, filepath.Join(repo, "docs", "draft.mdx"), "untracked\n")
+	write(t, filepath.Join(repo, "notes.md"), "untracked uncertain\n")
+	if err := os.Symlink("guide.md", filepath.Join(repo, "docs", "untracked-link.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := Resolver{GitPath: "git"}
+	first, err := resolver.Radiograph(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := resolver.Radiograph(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Identity == "" || first.Identity != second.Identity {
+		t.Fatalf("radiography = %#v", first)
+	}
+	wantDocumentation := []DocumentationEvidence{
+		{Path: "README.md", Digest: "sha256:2c2c27e79d6971c6e7e865045aa88361e791ba82d2b582b97aa81944903e99f6", Classification: "uncertain", Evidence: "maintenance_evidence_absent"},
+		{Path: "docs/api.generated.mdx", Digest: "sha256:9f5936ff15d3a2ba7d3d8f21858338a6c1e2adc9fe34c685c7de5b4a00caa29a", Classification: "uncertain", Evidence: "generated_name_heuristic"},
+		{Path: "docs/draft.mdx", Classification: "uncertain", Evidence: "untracked_content_not_read"},
+		{Path: "docs/guide.md", Digest: "sha256:4038d6296bb0b2d4f46a2467edea3960d474a5027379f018dbd4cf8fb4cc37d2", Classification: "uncertain", Evidence: "maintenance_evidence_absent"},
+		{Path: "docs/untracked-link.md", Classification: "uncertain", Evidence: "untracked_content_not_read"},
+		{Path: "notes.md", Classification: "uncertain", Evidence: "untracked_content_not_read"},
+	}
+	wantExclusions := []Exclusion{
+		{Path: "CMakeLists.txt", Reason: "non_documentation_path", Evidence: "path_extension_or_known_non_documentation_name"},
+		{Path: "README.sh", Reason: "non_documentation_path", Evidence: "path_extension_or_known_non_documentation_name"},
+		{Path: "docs/executable.mdx", Reason: "executable_documentation", Evidence: "executable_mode"},
+		{Path: "docs/generated/api.md", Reason: "generated_or_vendor", Evidence: "generated_or_vendor_directory"},
+		{Path: "docs/linked.md", Reason: "symlink_documentation", Evidence: "symlink_mode"},
+		{Path: "requirements.txt", Reason: "non_documentation_path", Evidence: "path_extension_or_known_non_documentation_name"},
+		{Path: "vendor/guide.md", Reason: "generated_or_vendor", Evidence: "generated_or_vendor_directory"},
+	}
+	if !reflect.DeepEqual(first.Documentation, wantDocumentation) || !reflect.DeepEqual(first.Exclusions, wantExclusions) || first.Ownership != (OwnershipUncertainty{Uncertain: true, Reason: "ownership_not_inferred_from_repository_evidence"}) {
+		t.Fatalf("radiography = %#v", first)
+	}
+}
+
+func TestResolverRadiographSkipsIgnoredUntrackedDocumentation(t *testing.T) {
+	repo := newRepository(t)
+	write(t, filepath.Join(repo, ".gitignore"), "ignored.md\n")
+	runGit(t, repo, "add", ".gitignore")
+	runGit(t, repo, "commit", "-m", "ignore fixture")
+	write(t, filepath.Join(repo, "ignored.md"), "ignored\n")
+	write(t, filepath.Join(repo, "visible.md"), "visible\n")
+
+	report, err := (Resolver{GitPath: "git"}).Radiograph(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []DocumentationEvidence{{Path: "visible.md", Classification: "uncertain", Evidence: "untracked_content_not_read"}}
+	if !reflect.DeepEqual(report.Documentation, want) {
+		t.Fatalf("documentation = %#v, want %#v", report.Documentation, want)
+	}
+}
+
+func TestRadiographyIdentityBindsSemanticFields(t *testing.T) {
+	entries := map[string]inventoryEntry{"README.sh": {"100755", "script", true}, "guide.md": {"100644", "object", true}}
+	documentation := []DocumentationEvidence{{"guide.md", "sha256:digest", "uncertain", "maintenance_evidence_absent"}, {"other.md", "sha256:other", "maintained", "owner_signal"}}
+	exclusions := []Exclusion{{"README.sh", "non_documentation_path", "path_extension_or_known_non_documentation_name"}, {"vendor.md", "generated_or_vendor", "generated_or_vendor_directory"}}
+	ownership := OwnershipUncertainty{Uncertain: true, Reason: "ownership_not_inferred_from_repository_evidence"}
+	root, otherRoot := "/repo", "/other"
+	identity := func() string { return radiographyIdentity(root, ownership, entries, documentation, exclusions) }
+	swap := func(a, b *string) { *a, *b = *b, *a }
+	cases := []struct {
+		name   string
+		mutate func()
+	}{
+		{"root", func() { swap(&root, &otherRoot) }},
+		{"documentation order", func() { documentation[0], documentation[1] = documentation[1], documentation[0] }},
+		{"documentation path", func() { swap(&documentation[0].Path, &documentation[1].Path) }},
+		{"documentation digest", func() { swap(&documentation[0].Digest, &documentation[1].Digest) }},
+		{"documentation classification", func() { swap(&documentation[0].Classification, &documentation[1].Classification) }},
+		{"documentation evidence", func() { swap(&documentation[0].Evidence, &documentation[1].Evidence) }},
+		{"exclusion order", func() { exclusions[0], exclusions[1] = exclusions[1], exclusions[0] }},
+		{"exclusion path", func() { swap(&exclusions[0].Path, &exclusions[1].Path) }},
+		{"exclusion reason", func() { swap(&exclusions[0].Reason, &exclusions[1].Reason) }},
+		{"exclusion evidence", func() { swap(&exclusions[0].Evidence, &exclusions[1].Evidence) }},
+		{"mode", func() { entries["guide.md"] = inventoryEntry{"100755", "object", true} }},
+		{"object ID", func() { entries["guide.md"] = inventoryEntry{"100644", "other", true} }},
+		{"tracked", func() { entries["guide.md"] = inventoryEntry{"100644", "object", false} }},
+		{"ownership boolean", func() { ownership.Uncertain = !ownership.Uncertain }},
+		{"ownership reason", func() { swap(&ownership.Reason, &otherRoot) }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			baseline := identity()
+			test.mutate()
+			if baseline == identity() {
+				t.Fatal("identity did not bind field")
+			}
+		})
+	}
+}
+
+func TestRadiographyExclusionPrecedenceAndSafety(t *testing.T) {
+	for _, test := range []struct{ file, mode, reason, evidence string }{
+		{"README.sh", "100755", "non_documentation_path", "path_extension_or_known_non_documentation_name"},
+		{"docs/linked.md", "120000", "symlink_documentation", "symlink_mode"},
+		{"generated/linked.md", "120000", "symlink_documentation", "symlink_mode"},
+		{"docs/generated/api.md", "100755", "generated_or_vendor", "generated_or_vendor_directory"},
+		{"docs/executable.md", "100755", "executable_documentation", "executable_mode"},
+		{"../outside.md", "100644", "unsafe_path", "path_not_safe_to_read"},
+	} {
+		t.Run(test.file, func(t *testing.T) {
+			reason, evidence := radiographyExclusion(test.file, test.mode)
+			if reason != test.reason || evidence != test.evidence {
+				t.Fatalf("radiographyExclusion(%q, %q) = %q, %q", test.file, test.mode, reason, evidence)
+			}
+		})
+	}
+}
 
 func TestResolverResolvesRootsAndScopes(t *testing.T) {
 	repo := newRepository(t)
@@ -43,7 +186,6 @@ func TestResolverResolvesRootsAndScopes(t *testing.T) {
 			}
 		})
 	}
-
 	if err := runGitError(repo, "reset"); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +372,7 @@ func TestResolverClassifiesRevisionContentAndInitialRootDiscoveryOutputOverflow(
 func TestResolverClassifiesIdentityStageOutputOverflow(t *testing.T) {
 	repo := scopeRepository(t)
 	git := filepath.Join(t.TempDir(), "git")
-	write(t, git, "#!/bin/sh\ncase \"$*\" in *show-toplevel*) printf '%s\\n' '"+repo+"' ;; *'diff --'*) printf 'README.md\\0' ;; *diff-index*) yes x | head -c 1048577 ;; esac\n")
+	write(t, git, "#!/bin/sh\ncase \"$*\" in *show-toplevel*) printf '%s\\n' '"+repo+"' ;; *'diff --'*) yes x | head -c 1048577 ;; esac\n")
 	if err := os.Chmod(git, 0o700); err != nil {
 		t.Fatal(err)
 	}

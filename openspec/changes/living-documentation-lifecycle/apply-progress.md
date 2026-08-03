@@ -115,11 +115,25 @@ Identities match before and after the bounded verification set.
 
 ## Remaining Tasks
 
-- [ ] 2.1–2.6 Radiography, planning, approvals, and staged MCP operations.
+- [ ] 2.4–2.6 Unit 2a2 Git identity/read-only safety.
 - [ ] 3.1–3.5 Catalog, audit, verification, and final integration evidence.
-
+## Unit 2a1 Final Line-Neutral Correction: Repository Inventory & Classification (Strict TDD)
+- Outcome: passed; prior correction receipt `git diff --numstat 5b962489a08d0b301e0ee21c61cfea5afb0ec8d0 2b6354dd2cbe73adb90c106e8bf0f39ea48914c2` = 215 lines under explicit 220-line authority; final work unit `unit-2a1-final-line-neutral-correction` is 120/120 lines from baseline `2b6354dd2cbe73adb90c106e8bf0f39ea48914c2`; identity binds emitted order/every semantic field and 2a2 remains excluded.
+| Task | Test file/layer | Safety net | RED | GREEN / triangulate | Refactor |
+|---|---|---|---|---|---|
+| 2.1 | `resolver_test.go` / integration | `go test ./internal/adapters/git -count=1` — exit 0 | exact order assertions: exit 1 | focused exit 0; 4 top-level tests, 21 subtests | gofmt exit 0 |
+| 2.2 | `resolver.go` / integration | same | same RED | focused exit 0; order plus all fields bind | compact serialization; gofmt exit 0 |
+| 2.3 | OpenSpec evidence | N/A | N/A | resolver/compatibility/full/check/accounting exit 0 | N/A |
+### Work Unit Evidence
+| Evidence | Exact result |
+|---|---|
+| Focused / runtime | `go test ./internal/adapters/git -run 'TestResolverRadiographsDocumentationWithExplicitExclusions|TestResolverRadiographSkipsIgnoredUntrackedDocumentation|TestRadiographyIdentityBindsSemanticFields|TestRadiographyExclusionPrecedenceAndSafety' -count=1 -v` — exit 0; 4 top-level tests, 21 subtests; first two use real temporary Git repositories. |
+| Resolver / compatibility | `go test ./internal/adapters/git -count=1`; `go test ./internal/app ./internal/adapters/mcp -count=1` — all exit 0; resolver, document-change/pre-push, MCP receipt and stdio compatibility packages passed. |
+| Full / check-only | `go test ./...` — exit 0; 9 packages passed and `assets` had no test files. `gofmt -l internal/adapters/git/resolver.go internal/adapters/git/resolver_test.go` and `git diff --check` — exit 0/no output. |
+| Rollback | Revert only Unit 2a1 changes in `internal/adapters/git/resolver.go`, `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and this cumulative `apply-progress.md`; document-change, receipt, pre-push, 2a2, and later units remain intact. |
+- Chain: feature-branch-chain; `feat/living-documentation-lifecycle-02-radiography` targets PR #6 `a051667`; 2a2 targets this branch.
+- No `size:exception`; `git diff --numstat 2b6354dd2cbe73adb90c106e8bf0f39ea48914c2` = 58 additions + 62 deletions = 120, while `git diff --numstat a051667` = 365 additions + 30 deletions = 395 final PR lines.
 ## PR 1d Replay Integrity (Strict TDD)
-
 ### Result Contract
 
 - Outcome: passed.

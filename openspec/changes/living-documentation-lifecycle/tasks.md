@@ -4,31 +4,34 @@
 
 | Field | Value |
 |---|---|
-| Changed-line evidence/budget | PR 1c: 388 current; PR 1d: separately budgeted ≤400 |
-| 400-line budget risk | High overall; Medium per child |
+| Changed-line budget | Historical slices recorded; each Unit 2 child ≤400 additions+deletions |
+| 400-line budget risk | High overall; Low per Unit 2 child |
 | Chained PRs recommended | Yes |
-| Suggested split | tracker→#3→#4/1b→PR 1c→PR 1d→Unit 2→Unit 3 |
-| Delivery strategy | ask-on-risk, resolved by user-selected split |
+| Suggested split | tracker→#3→#4/1b→1c→1d→#6→2a1→2a2→2b→2c→3 |
+| Delivery strategy | ask-on-risk, resolved by maintainer-approved split |
 | Chain strategy | feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
 Chain strategy: feature-branch-chain
 400-line budget risk: High
-No `size:exception`: PR 1c and PR 1d must each remain ≤400 changed lines.
+No `size:exception`: every Unit 2 child remains ≤400 additions+deletions.
 
 ### Suggested Work Units
 
 | Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
 |---|---|---|---|---|---|
-| 1 | Domain/DB | #3←tracker | `go test ./internal/domain ./internal/adapters/sqlite` | Lifecycle scenario | domain/DB |
-| 1b | Correction | #4/1b←#3 | `go test ./internal/domain` | Identity scenario | domain + tests |
-| 1c | Historical v1→v2 migration foundation; no Save replay integration | PR 1c base=PR #4 | `go test ./internal/adapters/sqlite` | exact v1 fixture→migration | migration/schema tests only |
-| 1d | Typed replay integrity and terminal proof | PR 1d base=PR 1c | `go test ./internal/domain ./internal/adapters/sqlite` | migrated-key refusal and fresh-v2 replay | replay domain/Save/tests/evidence |
-| 2 | Radiography | Unit 2 base=completed PR 1d | `go test ./internal/app ./internal/adapters/git ./internal/adapters/mcp` | Stdio radiograph→plan | service/resolver/MCP |
-| 3 | Catalog | Unit 3←Unit 2 | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | Stdio authorize→edit→verify | catalog/audit/verify |
+| 1 | Domain/DB | #3←tracker | `go test ./internal/domain ./internal/adapters/sqlite` | Lifecycle scenario | recorded Unit 1 files/behavior |
+| 1b | Correction | #4/1b←#3 | `go test ./internal/domain` | Identity scenario | recorded Unit 1b files/behavior |
+| 1c | Migration foundation | base=PR #4 | `go test ./internal/adapters/sqlite` | v1 fixture→migration | migration/schema tests only |
+| 1d | Replay integrity | base=PR 1c | `go test ./internal/domain ./internal/adapters/sqlite` | migrated refusal; fresh-v2 replay | replay domain/Save/tests/evidence |
+| 2a1 | Inventory & classification (260–360 lines) | base=PR #6 `a051667` replay-integrity | `go test ./internal/adapters/git` | real temporary Git fixture; helper-only precedence is not runtime evidence | `resolver.go`, `resolver_test.go`, `tasks.md`, `apply-progress.md` |
+| 2a2 | Git identity & read-only safety (250–360 lines) | base=2a1 branch | `go test ./internal/adapters/git` | temporary repos: lexical/physical roots, staged/initial/empty-index/`commit -a`/unmerged states; before/after `Radiograph` | identity/snapshot hunks in `internal/adapters/git/{resolver.go,resolver_test.go}` |
+| 2b | Planning service (280–380 lines) | base=2a2 branch | `go test ./internal/app` | radiography→bounded plan; denial/no authoring | service/tests only |
+| 2c | MCP staging (250–380 lines) | base=2b branch | `go test ./internal/adapters/mcp` | stdio radiography→plan; no visible writes | MCP adapter/tests only |
+| 3 | Catalog | base=completed 2c branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
 
-Feature-chain: tracker→PR #3→PR #4→PR 1c→PR 1d→Unit 2; only tracker merges to `develop`.
+Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2→2b→2c→3; only tracker merges to `develop`. PR 2a1 targets PR #6/current replay-integrity; each later child targets its immediate parent and must be retargeted/rebased if polluted.
 
 ## Unit 1
 
@@ -58,16 +61,28 @@ Feature-chain: tracker→PR #3→PR #4→PR 1c→PR 1d→Unit 2; only tracker me
 - [x] 1.15 GREEN: `internal/domain/lifecycle.go` and `internal/adapters/sqlite/lifecycle.go` use typed state/error and pre-validation, pre-`BEGIN IMMEDIATE` legacy lookup/refusal.
 - [x] 1.16 Evidence: cumulative focused/runtime/full/check-only results; truthful exact Git accounting and complete cross-slice rollback proof/boundary.
 
-## Unit 2
+## Unit 2a1: Repository Inventory & Classification (base=PR #6 `a051667` replay integrity)
 
-- [ ] 2.1 RED: `internal/adapters/git/resolver_test.go` excludes non-doc/generated inputs; reports reason/uncertainty.
-- [ ] 2.2 RED: resolver root variants and staged/empty-index/`commit -a` make no writes or state changes.
-- [ ] 2.3 GREEN: `internal/adapters/git/resolver.go` read-only discovery, evidence, exclusions, ownership uncertainty.
-- [ ] 2.4 RED: `internal/app/lifecycle_service_test.go` radiography, denial, policy/batch, in-plan/blocked actions.
-- [ ] 2.5 GREEN: `internal/app/lifecycle_service.go` bounded plan/batch/policy and local provenance; no authoring.
-- [ ] 2.6 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` staged tools, ownership conflict, no visible writes.
+- [x] 2.1 RED: `internal/adapters/git/resolver_test.go` inventories tracked plus applicable untracked Markdown/MDX; classifies uncertain and excluded without invented certainty, with evidence/reasons and deterministic ordering.
+- [x] 2.2 GREEN: `internal/adapters/git/resolver.go` discovers/classifies paths; precedence is non-doc, symlink, generated/vendor, executable; directory location never establishes maintained status.
+- [x] 2.3 Evidence: record exact focused real-Git-fixture runtime result, compatibility/full/check/accounting, and the four-file 2a1-only rollback boundary; do not mark complete until proof passes.
 
-## Unit 3
+## Unit 2a2: Git Identity & Read-only Safety (base=completed 2a1)
+
+- [ ] 2.4 RED: `internal/adapters/git/resolver_test.go` distinguishes exact/physical roots, lexical duplicate inputs, staged/initial/empty-index/`commit -a`, and unmerged stage-sensitive identities; snapshot before/after `Radiograph`.
+- [ ] 2.5 GREEN: `internal/adapters/git/resolver.go` canonicalizes physical roots and stage-sensitive identities, deduplicates normalized roots, and snapshots `Radiograph` state with no writes.
+- [ ] 2.6 Evidence: record exact before/after repository-state receipts for every fixture, focused command, line accounting, and the 2a2-only rollback boundary.
+
+## Unit 2b: Planning Service (base=completed 2a2)
+
+- [ ] 2.7 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
+- [ ] 2.8 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
+
+## Unit 2c: MCP Staging (base=completed 2b)
+
+- [ ] 2.9 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools, ownership conflicts, stdio radiography→plan, no visible writes, and compatibility.
+
+## Unit 3: Catalog (base=completed 2c)
 
 - [ ] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
 - [ ] 3.2 RED: same test covers evidenced update/review/orphan/conflict/no-action, never truthfulness.
