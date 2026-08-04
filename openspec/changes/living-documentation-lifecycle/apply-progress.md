@@ -491,3 +491,42 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Tasks 3.1–3.2 remain correctly checked; no Unit 3b task is completed or modified.
 - Final child accounting against `7e2e0fb`: 268 additions + 6 deletions = 274 changed lines; no `size:exception` is claimed.
 - Correction actor churn is not reproducible: Unit 3a arrived as uncommitted parent work, so Git has no pre-correction tree. The final child remains below the 400-line limit.
+
+## Unit 3b Catalog Persistence & Verification (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. `VerifyOutcome` fail-closes against invalid authorization bindings and the MCP `verify_outcome` path records idempotent, internal lifecycle outcomes without writing visible documentation.
+- Parent-owned native attempt 44 token `sha256:663e087c18b7a88ce3a2ba05b8acdc6001dc887b3138d9cf511f0c7cdb472cc2` was neither acquired, reset, nor settled.
+- Work unit: `unit-3b-catalog-persistence-verification`; feature-branch-chain child base is `9c4f946`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 3.3 | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite -count=1` — exit 0; 3 packages | `go test ./internal/app -run 'TestCatalogServiceVerifyOutcome' -count=1 -v` — exit 1; `VerifyOutcome` and request type undefined | same command — exit 0; 2 tests, 7 rejection subtests | inactive, out-of-plan, stale, revision, scope, baseline, and matching evidence | extracted `allowedAction`; gofmt and focused pass |
+| 3.4 | `internal/adapters/mcp/mcp_test.go` / integration | same 3-package baseline | `go test ./internal/adapters/mcp -run 'TestMCPVerifyOutcomePersistsIdempotently' -count=1 -v` — exit 1; input and handler undefined | same command — exit 0; one persistence/replay test | generic lifecycle idempotency plus direct MCP replay prove exactly one stored result | extracted provenance construction; focused pass |
+| 3.5 | `internal/adapters/mcp/mcp_test.go` / stdio integration | focused MCP tests green | N/A — verification/refactor task adds no production behavior | stdio authorize→edit→verify replay test exit 0 | real temporary Git repository plus repeated same-key call | `verificationProvenance`; reran focused MCP suite |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused tests | `go test ./internal/app -run 'TestCatalogService(VerifyOutcome|Imports|Assesses|Reports)' -count=1 -v` — exit 0; 6 top-level tests and 14 subtests passed. `go test ./internal/adapters/sqlite -run 'TestLifecycle(AtomicProvenanceAndIdempotency|ReplaysAvailableV2KeyExactlyOnce)' -count=1 -v` — exit 0; 2 tests passed. |
+| Runtime MCP harness | `go test ./internal/adapters/mcp -run 'TestMCP(StdioVerifiesEditedApprovedOutcomeIdempotently|VerifyOutcomePersistsIdempotently)' -count=1 -v` — exit 0; 2 tests passed. The stdio test creates a real Git repository, obtains an approved plan, edits `README.md`, verifies, then replays the same key with byte-identical output. |
+| Rollback boundary | Revert only Unit 3b hunks in `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, `internal/adapters/mcp/mcp.go`, `internal/adapters/mcp/mcp_test.go`, tasks 3.3–3.5, and this cumulative progress section; preserves Unit 3a import's empty `LastVerification` truth. |
+
+### Delivery and Scope
+
+- Catalog import, audit/orphan pending-action, and verification result records are serialized through `PersistCatalog` and atomically retained by the existing lifecycle SQLite idempotency transaction; the in-memory service still never writes visible documentation.
+- No visible documentation content was authored. No process remains after stdio test cleanup; temporary repositories and SQLite workspaces are test-owned `t.TempDir()` resources.
+- Full suite: `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files.
+- Format/check: `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go internal/adapters/mcp/mcp.go internal/adapters/mcp/mcp_test.go` and `git diff --check` — exit 0; no output.
+- Exact child accounting against `9c4f946`: 368 additions + 12 deletions = 380 changed lines; within the 400-line ceiling.
+
+### Attempt 45 Continuation
+
+- Parent-owned token `sha256:3efefcf8af2d092797f6e6d72ed38bff1b17b03e0eff275475f4b51b00d1eb97` was neither acquired, reset, nor settled.
+- RED: `TestPersistCatalogRetainsImportAuditOrphanAndVerification` failed because `CatalogRecord` and `PersistCatalog` were undefined. GREEN: the same focused command exited 0, retaining three result types and exact same-key replays in SQLite.
+- REFACTOR: compact `CatalogStore` boundary reuses `Lifecycle.Save`; `go test ./...`, `gofmt -l`, and `git diff --check` exited 0.
+- Cleanup: no process remains; temporary repositories and SQLite workspaces are test-owned `t.TempDir()` resources.
