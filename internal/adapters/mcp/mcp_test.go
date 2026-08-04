@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
 	"github.com/desatatufuria/mcp-doc-manager/internal/app"
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -54,8 +55,8 @@ func TestMCPStdioDocumentChangeAndReceipt(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"document_change", "propose_plan", "radiograph", "verify_receipt"}) {
-		t.Fatalf("MCP tools = %v; only read-only lifecycle staging tools may be exposed", names)
+	if !reflect.DeepEqual(names, []string{"document_change", "propose_plan", "radiograph", "verify_outcome", "verify_receipt"}) {
+		t.Fatalf("MCP tools = %v; only bounded lifecycle tools may be exposed", names)
 	}
 	result := callMCP(t, ctx, session, "document_change", map[string]any{"repository": repo, "scope": map[string]any{"kind": "staged", "range": ""}})
 	raw, err := json.Marshal(result.StructuredContent)
@@ -149,7 +150,7 @@ func TestMCPStdioRadiographyToPlanWithoutVisibleWrites(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"document_change", "propose_plan", "radiograph", "verify_receipt"}) {
+	if !reflect.DeepEqual(names, []string{"document_change", "propose_plan", "radiograph", "verify_outcome", "verify_receipt"}) {
 		t.Fatalf("MCP tools = %v", names)
 	}
 
@@ -204,6 +205,110 @@ func TestMCPStdioRadiographyToPlanWithoutVisibleWrites(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(repo, ".docmanager")); !os.IsNotExist(err) {
 		t.Fatalf("MCP plan persisted lifecycle state: %v", err)
+	}
+}
+
+func TestMCPVerifyOutcomePersistsIdempotently(t *testing.T) {
+	repo := mcpRepository(t)
+	writeMCP(t, filepath.Join(repo, "README.md"), "before\n")
+	mcpGit(t, repo, "add", "README.md")
+	mcpGit(t, repo, "commit", "-m", "initial")
+	action := domain.PlannedAction{Path: "README.md", Kind: domain.ActionUpdate}
+	authorization := domain.Authorization{BatchID: "batch-1", PlanRevision: "plan-1", PolicyRevision: "policy-1", Scope: domain.Scope{Kind: domain.ScopeWorktree}, Baseline: "baseline-1", Evidence: "evidence-1", Allowed: []domain.PlannedAction{action}, Active: true}
+	input := verificationInput{Repository: repo, Authorization: authorization, Current: authorization, Entry: domain.CatalogEntry{Path: "README.md", Evidence: "evidence-1"}, Action: action, Evidence: "evidence-1", Actor: "local-user", Interaction: "mcp:verify", Request: "request-1", IdempotencyKey: "key-1"}
+	t.Run("invalid first request does not persist", func(t *testing.T) {
+		invalid := input
+		invalid.Repository, invalid.Entry.Path = t.TempDir(), "OTHER.md"
+		failed, output, err := verifyOutcome(context.Background(), nil, invalid)
+		if err != nil || failed == nil || !failed.IsError || output.Error != app.ErrCatalogEvidenceRequired.Error() {
+			t.Fatalf("invalid verification = %#v, %#v, %v", failed, output, err)
+		}
+		lifecycle, err := sqliteadapter.OpenLifecycle(invalid.Repository)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lifecycle.Close()
+		if count, err := lifecycle.Count(context.Background()); err != nil || count != 0 {
+			t.Fatalf("persisted invalid outcomes = %d, %v", count, err)
+		}
+	})
+	_, first, err := verifyOutcome(context.Background(), nil, input)
+	if err != nil || first.Verification == nil || first.Verification.Err != nil || first.Verification.Verification.State != domain.VerificationVerified {
+		t.Fatalf("first verification = %#v, %v", first, err)
+	}
+	_, replay, err := verifyOutcome(context.Background(), nil, input)
+	if err != nil || !reflect.DeepEqual(replay.Verification, first.Verification) {
+		t.Fatalf("replay verification = %#v, %v", replay, err)
+	}
+	for _, tt := range []struct {
+		name   string
+		mutate func(*verificationInput)
+	}{
+		{"entry", func(input *verificationInput) { input.Entry.Purpose = "changed" }},
+		{"current authorization", func(input *verificationInput) {
+			input.Authorization.Baseline, input.Current.Baseline = "baseline-2", "baseline-2"
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			divergent := input
+			tt.mutate(&divergent)
+			failed, output, err := verifyOutcome(context.Background(), nil, divergent)
+			if err != nil || failed == nil || !failed.IsError || output.Error != domain.ErrIdempotencyConflict.Error() {
+				t.Fatalf("divergent replay = %#v, %#v, %v", failed, output, err)
+			}
+		})
+	}
+	lifecycle, err := sqliteadapter.OpenLifecycle(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lifecycle.Close()
+	if count, err := lifecycle.Count(context.Background()); err != nil || count != 1 {
+		t.Fatalf("persisted outcomes = %d, %v", count, err)
+	}
+}
+
+func TestMCPStdioVerifiesEditedApprovedOutcomeIdempotently(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping MCP stdio integration test in short mode")
+	}
+	repo := mcpRepository(t)
+	writeMCP(t, filepath.Join(repo, "README.md"), "before\n")
+	mcpGit(t, repo, "add", "README.md")
+	mcpGit(t, repo, "commit", "-m", "initial")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client := mcp.NewClient(&mcp.Implementation{Name: "mcp-verify-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: exec.Command("go", "run", "../../../cmd/docmanager", "mcp")}, nil)
+	if err != nil {
+		t.Fatalf("connect stdio server: %v", err)
+	}
+	defer session.Close()
+	plan := callMCP(t, ctx, session, "propose_plan", map[string]any{
+		"repository": repo, "visible_storage": ".", "audience": "contributors", "language": "en", "owner": "docs-team",
+		"confirmed": true, "plan_approved": true, "batch_approved": true, "policy_approved": true, "policy": "approval-required",
+		"actions": []map[string]any{{"path": "README.md", "kind": "update", "structural": false}},
+		"actor":   "local-user", "interaction": "mcp:plan", "request": "request-1", "idempotency_key": "plan-key",
+	})
+	raw, err := json.Marshal(plan.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var planned toolOutput
+	if err := json.Unmarshal(raw, &planned); err != nil || planned.Planning == nil || planned.Planning.Authorization == nil {
+		t.Fatalf("plan = %#v, %v", planned, err)
+	}
+	writeMCP(t, filepath.Join(repo, "README.md"), "after\n")
+	arguments := map[string]any{"repository": repo, "authorization": planned.Planning.Authorization, "current": planned.Planning.Authorization, "entry": domain.CatalogEntry{Path: "README.md", Evidence: planned.Planning.Authorization.Evidence}, "action": domain.PlannedAction{Path: "README.md", Kind: domain.ActionUpdate}, "evidence": planned.Planning.Authorization.Evidence, "actor": "local-user", "interaction": "mcp:verify", "request": "request-2", "idempotency_key": "verify-key"}
+	first := callMCP(t, ctx, session, "verify_outcome", arguments)
+	replay := callMCP(t, ctx, session, "verify_outcome", arguments)
+	firstRaw, err := json.Marshal(first.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayRaw, err := json.Marshal(replay.StructuredContent)
+	if err != nil || string(replayRaw) != string(firstRaw) {
+		t.Fatalf("replay = %s, %v", replayRaw, err)
 	}
 }
 

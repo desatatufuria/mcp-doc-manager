@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
 	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
@@ -51,12 +52,26 @@ type plannedActionInput struct {
 	Structural bool              `json:"structural"`
 }
 
+type verificationInput struct {
+	Repository     string               `json:"repository" jsonschema:"absolute repository root"`
+	Evidence       string               `json:"evidence"`
+	Actor          string               `json:"actor"`
+	Interaction    string               `json:"interaction"`
+	Request        string               `json:"request"`
+	IdempotencyKey string               `json:"idempotency_key"`
+	Authorization  domain.Authorization `json:"authorization"`
+	Current        domain.Authorization `json:"current"`
+	Entry          domain.CatalogEntry  `json:"entry"`
+	Action         domain.PlannedAction `json:"action"`
+}
+
 type toolOutput struct {
-	Report      *domain.Report          `json:"report,omitempty"`
-	Radiography *gitadapter.Radiography `json:"radiography,omitempty"`
-	Planning    *app.PlanningResult     `json:"planning,omitempty"`
-	Verified    bool                    `json:"verified,omitempty"`
-	Error       string                  `json:"error,omitempty"`
+	Report       *domain.Report                 `json:"report,omitempty"`
+	Radiography  *gitadapter.Radiography        `json:"radiography,omitempty"`
+	Planning     *app.PlanningResult            `json:"planning,omitempty"`
+	Verification *app.CatalogVerificationResult `json:"verification,omitempty"`
+	Verified     bool                           `json:"verified,omitempty"`
+	Error        string                         `json:"error,omitempty"`
 }
 
 func Serve(ctx context.Context) error {
@@ -69,6 +84,7 @@ func NewServer() *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{Name: "verify_receipt", Description: "Verify one content-bound analysis receipt."}, verifyReceipt)
 	mcp.AddTool(server, &mcp.Tool{Name: "radiograph", Description: "Read repository documentation evidence without changing files."}, radiograph)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_plan", Description: "Propose a bounded documentation plan without authoring or persistence."}, proposePlan)
+	mcp.AddTool(server, &mcp.Tool{Name: "verify_outcome", Description: "Verify and persist one approved caller-authored outcome."}, verifyOutcome)
 	return server
 }
 
@@ -134,6 +150,49 @@ func proposePlan(ctx context.Context, _ *mcp.CallToolRequest, input planningInpu
 	return nil, toolOutput{Planning: &result}, nil
 }
 
+func verifyOutcome(ctx context.Context, _ *mcp.CallToolRequest, input verificationInput) (*mcp.CallToolResult, toolOutput, error) {
+	result := (app.CatalogService{}).VerifyOutcome(app.CatalogVerificationRequest{Authorization: input.Authorization, Current: input.Current, Entry: input.Entry, Action: input.Action, Evidence: input.Evidence})
+	if result.Err != nil {
+		return failure(result.Err)
+	}
+	payload, err := json.Marshal(struct {
+		Entry        domain.CatalogEntry
+		Verification domain.Verification
+	}{result.Entry, result.Verification})
+	if err != nil {
+		return failure(domain.ErrLifecycle)
+	}
+	lifecycle, err := sqliteadapter.OpenLifecycle(input.Repository)
+	if err != nil {
+		return failure(err)
+	}
+	defer lifecycle.Close()
+	stored, err := lifecycle.Save(ctx, input.IdempotencyKey, string(payload), verificationProvenance(input, result))
+	if err != nil {
+		return failure(err)
+	}
+	var persisted struct {
+		Entry        domain.CatalogEntry
+		Verification domain.Verification
+	}
+	if err := json.Unmarshal([]byte(stored), &persisted); err != nil {
+		return failure(domain.ErrLifecycle)
+	}
+	result.Entry, result.Verification = persisted.Entry, persisted.Verification
+	return nil, toolOutput{Verification: &result}, nil
+}
+
+func verificationProvenance(input verificationInput, result app.CatalogVerificationResult) domain.Provenance {
+	requestIdentity, _ := json.Marshal(input)
+	return domain.Provenance{
+		Authority: domain.DeclaredLocalProvenance, DeclaredActor: input.Actor, Interaction: input.Interaction,
+		Context: input.Authorization.PlanRevision, Operation: "verify_outcome", Request: input.Request, IdempotencyKey: input.IdempotencyKey,
+		Time: time.Now().UTC().Format(time.RFC3339Nano), Approval: "approved", Evidence: input.Evidence,
+		Input: string(requestIdentity), Result: string(result.Verification.State),
+		Versions: input.Authorization.PlanRevision + "/" + input.Authorization.PolicyRevision,
+	}
+}
+
 func validateScope(scope domain.Scope) error {
 	if scope.Kind != domain.ScopeRange && scope.Kind != domain.ScopeStaged && scope.Kind != domain.ScopeWorktree {
 		return domain.ErrInvalidScope
@@ -147,7 +206,7 @@ func failure(err error) (*mcp.CallToolResult, toolOutput, error) {
 }
 
 func classify(err error) string {
-	for _, typed := range []error{app.ErrPlanningDenied, domain.ErrIdempotencyConflict, domain.ErrInvalidScope, domain.ErrNotRepository, domain.ErrOutsideRepository, domain.ErrGitUnavailable, domain.ErrUnsupportedRequest, domain.ErrLedgerFailure, domain.ErrReceiptMismatch, domain.ErrInvalidTarget} {
+	for _, typed := range []error{app.ErrPlanningDenied, app.ErrCatalogEvidenceRequired, domain.ErrIdempotencyConflict, domain.ErrInvalidScope, domain.ErrNotRepository, domain.ErrOutsideRepository, domain.ErrGitUnavailable, domain.ErrUnsupportedRequest, domain.ErrLedgerFailure, domain.ErrReceiptMismatch, domain.ErrInvalidTarget} {
 		if errors.Is(err, typed) {
 			return typed.Error()
 		}

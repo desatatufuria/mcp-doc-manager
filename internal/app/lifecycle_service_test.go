@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
+	sqliteadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/sqlite"
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
 )
 
@@ -217,6 +218,92 @@ func TestCatalogServiceReportsOnlyEvidencedAuditTreatments(t *testing.T) {
 	if got := service.Assess(CatalogAssessment{Entry: entry}); !errors.Is(got.Err, ErrCatalogEvidenceRequired) {
 		t.Fatalf("missing evidence = %#v", got)
 	}
+}
+
+func TestCatalogServiceVerifyOutcomeFailsClosedForInvalidAuthorization(t *testing.T) {
+	service := CatalogService{Clock: fixedPlanningClock}
+	action := domain.PlannedAction{Path: "docs/guide.md", Kind: domain.ActionUpdate}
+	authorization := domain.Authorization{
+		BatchID: "batch-1", PlanRevision: "plan-1", PolicyRevision: "policy-1",
+		Scope: domain.Scope{Kind: domain.ScopeWorktree}, Baseline: "baseline-1", Evidence: "evidence-1",
+		Allowed: []domain.PlannedAction{action}, Active: true,
+	}
+	for _, tt := range []struct {
+		name     string
+		current  domain.Authorization
+		action   domain.PlannedAction
+		evidence string
+		state    domain.VerificationState
+	}{
+		{"inactive", domain.Authorization{BatchID: "batch-1", PlanRevision: "plan-1", PolicyRevision: "policy-1", Scope: domain.Scope{Kind: domain.ScopeWorktree}, Baseline: "baseline-1", Evidence: "evidence-1", Allowed: []domain.PlannedAction{action}}, action, "evidence-1", domain.VerificationMismatch},
+		{"out of plan", authorization, domain.PlannedAction{Path: "docs/outside.md", Kind: domain.ActionUpdate}, "evidence-1", domain.VerificationMismatch},
+		{"stale evidence", authorization, action, "evidence-2", domain.VerificationStale},
+		{"revision mismatch", authorizationWith(authorization, func(a *domain.Authorization) { a.PlanRevision = "plan-2" }), action, "evidence-1", domain.VerificationMismatch},
+		{"scope mismatch", authorizationWith(authorization, func(a *domain.Authorization) { a.Scope = domain.Scope{Kind: domain.ScopeStaged} }), action, "evidence-1", domain.VerificationMismatch},
+		{"baseline mismatch", authorizationWith(authorization, func(a *domain.Authorization) { a.Baseline = "baseline-2" }), action, "evidence-1", domain.VerificationMismatch},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := service.VerifyOutcome(CatalogVerificationRequest{Authorization: authorization, Current: tt.current, Entry: domain.CatalogEntry{Path: "docs/guide.md", Evidence: "evidence-1"}, Action: tt.action, Evidence: tt.evidence})
+			if !errors.Is(got.Err, ErrCatalogEvidenceRequired) || got.Verification.State != tt.state || got.Entry.LastVerification != "" {
+				t.Fatalf("verification = %#v", got)
+			}
+		})
+	}
+}
+
+func TestCatalogServiceVerifyOutcomeRecordsMatchingOutcome(t *testing.T) {
+	action := domain.PlannedAction{Path: "docs/guide.md", Kind: domain.ActionUpdate}
+	authorization := domain.Authorization{BatchID: "batch-1", PlanRevision: "plan-1", PolicyRevision: "policy-1", Scope: domain.Scope{Kind: domain.ScopeWorktree}, Baseline: "baseline-1", Evidence: "evidence-1", Allowed: []domain.PlannedAction{action}, Active: true}
+	got := (CatalogService{Clock: fixedPlanningClock}).VerifyOutcome(CatalogVerificationRequest{Authorization: authorization, Current: authorization, Entry: domain.CatalogEntry{Path: "docs/guide.md", Evidence: "evidence-1"}, Action: action, Evidence: "evidence-1"})
+	if got.Err != nil || got.Verification.State != domain.VerificationVerified || got.Verification.Evidence != "evidence-1" || got.Entry.LastVerification != "2026-08-03T00:00:00Z" {
+		t.Fatalf("verification = %#v", got)
+	}
+}
+
+func TestCatalogServiceVerifyOutcomeRejectsWrongEntryPath(t *testing.T) {
+	action := domain.PlannedAction{Path: "docs/guide.md", Kind: domain.ActionUpdate}
+	authorization := domain.Authorization{BatchID: "batch-1", PlanRevision: "plan-1", PolicyRevision: "policy-1", Scope: domain.Scope{Kind: domain.ScopeWorktree}, Baseline: "baseline-1", Evidence: "evidence-1", Allowed: []domain.PlannedAction{action}, Active: true}
+	got := (CatalogService{Clock: fixedPlanningClock}).VerifyOutcome(CatalogVerificationRequest{Authorization: authorization, Current: authorization, Entry: domain.CatalogEntry{Path: "docs/wrong.md", Evidence: "evidence-1"}, Action: action, Evidence: "evidence-1"})
+	if !errors.Is(got.Err, ErrCatalogEvidenceRequired) || got.Verification.State != domain.VerificationMismatch || got.Entry.LastVerification != "" {
+		t.Fatalf("verification = %#v", got)
+	}
+}
+
+func TestPersistCatalogRetainsImportAuditOrphanAndVerification(t *testing.T) {
+	lifecycle, err := sqliteadapter.OpenLifecycle(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lifecycle.Close()
+	records := []CatalogRecord{
+		{Import: &CatalogImportResult{Entries: []domain.CatalogEntry{{Path: "docs/guide.md", State: domain.CatalogImported}}}},
+		{Assessment: &CatalogAssessmentResult{Entry: domain.CatalogEntry{Path: "docs/old.md", State: domain.CatalogOrphan, PendingActions: []domain.PendingAction{{State: domain.PendingOpen, Evidence: "evidence"}}}, Audit: domain.Audit{State: domain.AuditReported, Result: domain.AuditOrphan, Evidence: "evidence", Rationale: "absent"}}},
+		{Verification: &CatalogVerificationResult{Entry: domain.CatalogEntry{Path: "docs/guide.md", LastVerification: "2026-08-03T00:00:00Z"}, Verification: domain.Verification{State: domain.VerificationVerified, Evidence: "evidence"}}},
+	}
+	for i, record := range records {
+		key := "catalog-key-" + string(rune('a'+i))
+		provenance := catalogPersistenceProvenance(key)
+		got, err := PersistCatalog(context.Background(), lifecycle, key, provenance, record)
+		if err != nil || !reflect.DeepEqual(got, record) {
+			t.Fatalf("record %d = %#v, %v", i, got, err)
+		}
+		replay, err := PersistCatalog(context.Background(), lifecycle, key, provenance, CatalogRecord{})
+		if err != nil || !reflect.DeepEqual(replay, record) {
+			t.Fatalf("replay %d = %#v, %v", i, replay, err)
+		}
+	}
+	if count, err := lifecycle.Count(context.Background()); err != nil || count != len(records) {
+		t.Fatalf("persisted records = %d, %v", count, err)
+	}
+}
+
+func catalogPersistenceProvenance(key string) domain.Provenance {
+	return domain.Provenance{Authority: domain.DeclaredLocalProvenance, DeclaredActor: "local-user", Interaction: "mcp:catalog", Context: "plan-1", Operation: "catalog_persist", Request: key, IdempotencyKey: key, Time: "2026-08-03T00:00:00Z", Approval: "approved", Evidence: "evidence", Input: key, Result: "persisted", Versions: "plan-1/policy-1"}
+}
+
+func authorizationWith(a domain.Authorization, mutate func(*domain.Authorization)) domain.Authorization {
+	mutate(&a)
+	return a
 }
 
 type fakeRadiography struct {

@@ -107,9 +107,9 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 ## Unit 3b: Catalog Persistence & Verification (base=completed 3a)
 
-- [ ] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
-- [ ] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
-- [ ] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
+- [x] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
+- [x] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
+- [x] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
 
 ## Unit 2 Mapping
 

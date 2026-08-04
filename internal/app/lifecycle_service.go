@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -198,6 +199,45 @@ type CatalogAssessmentResult struct {
 	Err   error
 }
 
+type CatalogVerificationRequest struct {
+	Authorization domain.Authorization
+	Current       domain.Authorization
+	Entry         domain.CatalogEntry
+	Action        domain.PlannedAction
+	Evidence      string
+}
+
+type CatalogVerificationResult struct {
+	Entry        domain.CatalogEntry
+	Verification domain.Verification
+	Err          error
+}
+
+type CatalogStore interface {
+	Save(context.Context, string, string, domain.Provenance) (string, error)
+}
+
+type CatalogRecord struct {
+	Import       *CatalogImportResult
+	Assessment   *CatalogAssessmentResult
+	Verification *CatalogVerificationResult
+}
+
+func PersistCatalog(ctx context.Context, store CatalogStore, key string, provenance domain.Provenance, record CatalogRecord) (CatalogRecord, error) {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return CatalogRecord{}, err
+	}
+	stored, err := store.Save(ctx, key, string(payload), provenance)
+	if err != nil {
+		return CatalogRecord{}, err
+	}
+	if err := json.Unmarshal([]byte(stored), &record); err != nil {
+		return CatalogRecord{}, err
+	}
+	return record, nil
+}
+
 // CatalogService derives in-memory catalog evidence; it never writes visible documents.
 type CatalogService struct{ Clock func() time.Time }
 
@@ -248,6 +288,32 @@ func (s CatalogService) Assess(assessment CatalogAssessment) CatalogAssessmentRe
 		result.Audit.Result = domain.AuditNoAction
 	}
 	return result
+}
+
+// VerifyOutcome accepts only an active authorization whose full binding still matches.
+func (s CatalogService) VerifyOutcome(request CatalogVerificationRequest) CatalogVerificationResult {
+	result := CatalogVerificationResult{Entry: request.Entry, Verification: domain.Verification{State: domain.VerificationMismatch, Evidence: request.Evidence}}
+	if request.Authorization.Validate(request.Current) != nil || !allowedAction(request.Action, request.Current.Allowed) || request.Entry.Path != request.Action.Path {
+		result.Err = ErrCatalogEvidenceRequired
+		return result
+	}
+	if request.Evidence == "" || request.Evidence != request.Current.Evidence || request.Entry.Evidence != request.Current.Evidence {
+		result.Verification.State = domain.VerificationStale
+		result.Err = ErrCatalogEvidenceRequired
+		return result
+	}
+	result.Entry.LastVerification = s.now().Format(time.RFC3339Nano)
+	result.Verification = domain.Verification{State: domain.VerificationVerified, Evidence: request.Evidence}
+	return result
+}
+
+func allowedAction(action domain.PlannedAction, allowed []domain.PlannedAction) bool {
+	for _, candidate := range allowed {
+		if candidate == action {
+			return true
+		}
+	}
+	return false
 }
 
 func (s CatalogService) now() time.Time {
