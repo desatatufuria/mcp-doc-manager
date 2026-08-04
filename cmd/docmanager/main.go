@@ -133,6 +133,8 @@ func run(args []string) error {
 		return runWorkspace(args[1:], false)
 	case "install":
 		return runInstall(args[1:], productionInstallRuntime(os.Stdin, os.Stdout))
+	case "opencode":
+		return runOpenCode(args[1:], productionInstallRuntime(os.Stdin, os.Stdout))
 	case "doctor", "uninstall":
 		return runWorkspace(append([]string{args[0]}, args[1:]...), true)
 	default:

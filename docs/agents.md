@@ -19,13 +19,19 @@ Configuration is serialized with a lock, atomically written, and refused on malf
 
 | Agent | Configuration route | Docmanager-owned scope |
 | --- | --- | --- |
-| OpenCode | `os.UserConfigDir()/opencode/opencode.json` or `opencode.jsonc` | `mcp.docmanager` with `type: local`, the absolute Docmanager command array, and `enabled: true`. |
+| OpenCode | `os.UserConfigDir()/opencode/opencode.json` or `opencode.jsonc` | The exact pair: `mcp.docmanager` with `type: local`, the absolute Docmanager command array, and `enabled: true`; plus the absolute owned `.docmanager/guidance/opencode.md` instruction path. |
 | Codex | `~/.codex/config.toml` | `[mcp_servers.docmanager]` plus `.codex/AGENTS.md` managed guidance. |
 | Claude Code | `~/.claude.json` | `mcpServers.docmanager` plus `.claude/CLAUDE.md` managed guidance; config mode is `0600`. |
 | GitHub Copilot | VS Code User `mcp.json` | `servers.docmanager` plus `docmanager.instructions.md`. |
 | Pi | `~/.pi/agent/mcp.json` | `mcpServers.docmanager` plus managed guidance. |
 
-Docmanager removes only the exact structural entry it generates. If `mcp.docmanager` already differs, configuration and unconfiguration stop with an ownership conflict rather than overwriting it. JSONC leading comments are preserved; non-leading line or block comments are rejected conservatively.
+Docmanager removes only the exact structural entry pair it generates. If `mcp.docmanager` or its paired guidance reference differs, configuration and unconfiguration stop with an ownership conflict rather than overwriting it. JSONC leading comments are preserved; non-leading line or block comments are rejected conservatively.
+
+## OpenCode daily guidance
+
+The owned OpenCode guidance is a read-only review checkpoint, not an automation policy. It requires one explicit `worktree`, `staged`, or `base..head` scope, makes one `document_change` call, and requires human review before one unchanged `verify_receipt`. A changed scope or considered documentation byte invalidates that receipt and requires fresh analysis.
+
+`docmanager opencode status` and `doctor` report only OpenCode support, the owned pair, guidance readability/version, and the bounded probe; they do not repair configuration. The guidance does not infer scope, edit documentation, modify user instructions or `AGENTS.md`, manage MCP lifecycle, enable hooks, configure other agents, or compose release work. Roll back by removing only the exact owned pair; leave `.docmanager` and unrelated user configuration in place.
 
 ## Pi prerequisite
 

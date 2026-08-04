@@ -514,6 +514,16 @@ The process speaks MCP on stdin/stdout and normally remains running until the cl
 
 There are no MCP lifecycle or mutation tools. `install`, `doctor`, `uninstall`, and `hook-verify` remain CLI-only.
 
+### OpenCode daily review guidance
+
+`docmanager install --agent opencode` adds only an owned local MCP entry and the absolute `.docmanager/guidance/opencode.md` instruction reference to OpenCode; it preserves unrelated OpenCode configuration. The guidance is useful only for an explicit documentation-impact review:
+
+1. Select exactly one `worktree`, `staged`, or two-dot `base..head` scope and make one `document_change` call.
+2. Review the report yourself before requesting receipt verification.
+3. Verify at most once while the selected scope and considered documentation bytes are unchanged; otherwise re-analyze and review again.
+
+`docmanager opencode status` and `doctor` are read-only inspection commands for this OpenCode pair. This integration does not infer scope, edit documentation, modify user instructions or `AGENTS.md`, manage MCP lifecycle, enable hooks, configure other agents, or perform release work. To roll it back, remove only the exact owned MCP/instruction pair and retain `.docmanager` plus unrelated user configuration.
+
 ### `document_change` input
 
 ```json

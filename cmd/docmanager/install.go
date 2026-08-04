@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/desatatufuria/mcp-doc-manager/assets"
 	agentadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/agent"
 	"github.com/desatatufuria/mcp-doc-manager/internal/app"
 )
@@ -20,6 +21,7 @@ import (
 type installAgent interface {
 	Inspect(context.Context) (agentadapter.Status, error)
 	Configure(context.Context) error
+	Unconfigure(context.Context) error
 	Status(context.Context) (agentadapter.Status, error)
 }
 
@@ -32,18 +34,19 @@ type installRuntime struct {
 	lookPath         func(string) (string, error)
 	workspaceDoctor  func(string) (app.WorkspaceStatus, error)
 	workspaceInstall func(string, bool) (app.WorkspaceStatus, error)
-	openCode         func(string) installAgent
+	openCode         func(string, string) installAgent
 }
 
 type installResult struct {
-	Operation  string           `json:"operation"`
-	Outcome    string           `json:"outcome"`
-	Repository string           `json:"repository,omitempty"`
-	Agent      string           `json:"agent,omitempty"`
-	Hook       string           `json:"hook,omitempty"`
-	Workspace  bool             `json:"workspace_initialized"`
-	Configured bool             `json:"opencode_configured"`
-	Error      *app.StableError `json:"error,omitempty"`
+	Operation      string           `json:"operation"`
+	Outcome        string           `json:"outcome"`
+	Repository     string           `json:"repository,omitempty"`
+	Agent          string           `json:"agent,omitempty"`
+	Hook           string           `json:"hook,omitempty"`
+	Workspace      bool             `json:"workspace_initialized"`
+	WorkspaceState string           `json:"workspace_state,omitempty"`
+	Configured     bool             `json:"opencode_configured"`
+	Error          *app.StableError `json:"error,omitempty"`
 }
 
 func productionInstallRuntime(in io.Reader, out io.Writer) installRuntime {
@@ -51,9 +54,10 @@ func productionInstallRuntime(in io.Reader, out io.Writer) installRuntime {
 		in: in, out: out, getwd: os.Getwd, executable: os.Executable,
 		evalSymlinks: filepath.EvalSymlinks, lookPath: exec.LookPath,
 		workspaceDoctor: app.WorkspaceDoctor, workspaceInstall: app.WorkspaceInstall,
-		openCode: func(binary string) installAgent {
+		openCode: func(binary, root string) installAgent {
 			return agentadapter.NewOpenCode(agentadapter.OpenCodeOptions{
-				Binary:    binary,
+				Root: "", Binary: binary,
+				Guidance:  agentadapter.NewGuidanceIdentity(filepath.Join(root, ".docmanager", assets.OpenCodeGuidance.Path), assets.OpenCodeGuidance.Version, []byte(assets.OpenCodeGuidance.Content)),
 				Installed: func() bool { _, err := exec.LookPath("opencode"); return err == nil },
 				Run: func(ctx context.Context, argv ...string) error {
 					if len(argv) == 0 {
@@ -109,7 +113,7 @@ func runInstall(args []string, runtime installRuntime) error {
 	if _, err := runtime.lookPath("opencode"); err != nil {
 		return installFailureCode(runtime.out, *asJSON, *target, false, "unsupported_agent", "opencode is not detected")
 	}
-	opencode := runtime.openCode(binary)
+	opencode := runtime.openCode(binary, *target)
 	status, err := opencode.Inspect(context.Background())
 	if err != nil {
 		return installAdapterFailure(runtime.out, *asJSON, *target, err)
@@ -117,6 +121,7 @@ func runInstall(args []string, runtime installRuntime) error {
 	if !status.Installed || !status.Supported {
 		return installFailureCode(runtime.out, *asJSON, *target, false, "unsupported_agent", "opencode is not detected or supported")
 	}
+	createdPair := !status.Configured
 
 	result := installResult{Operation: "install", Outcome: "planned", Repository: *target, Agent: "opencode", Hook: "disabled"}
 	if *enableHook {
@@ -142,9 +147,10 @@ func runInstall(args []string, runtime installRuntime) error {
 
 	installed, err := runtime.workspaceInstall(*target, *enableHook)
 	if err != nil {
-		return installFailure(runtime.out, *asJSON, *target, false, err.Error())
+		return workspaceInstallFailure(runtime.out, *asJSON, *target, workspace.State, err)
 	}
 	result.Workspace = true
+	result.WorkspaceState = "retained"
 	result.Hook = installed.Hook
 	if err := opencode.Configure(context.Background()); err != nil {
 		return partialInstallFailure(runtime.out, *asJSON, result, "configuration", err)
@@ -155,6 +161,12 @@ func runInstall(args []string, runtime installRuntime) error {
 		if err == nil {
 			err = agentadapter.ErrProbeFailed
 		}
+		if createdPair {
+			if rollbackErr := opencode.Unconfigure(context.Background()); rollbackErr != nil {
+				err = fmt.Errorf("%w; rollback refused: %v", err, rollbackErr)
+			}
+		}
+		result.Configured = false
 		return partialInstallFailure(runtime.out, *asJSON, result, "verification", err)
 	}
 	result.Outcome = "success"
@@ -163,6 +175,36 @@ func runInstall(args []string, runtime installRuntime) error {
 	}
 	fmt.Fprintf(runtime.out, "Repository initialized: %s\nOpenCode configured: MCP enabled\nPre-push hook: %s\nVerify with: opencode mcp list\n", *target, result.Hook)
 	return nil
+}
+
+// runOpenCode exposes only the owned OpenCode inspection boundary; it never
+// composes generic agent, release, or mutation commands.
+func runOpenCode(args []string, runtime installRuntime) error {
+	fs := flag.NewFlagSet("opencode", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	asJSON := fs.Bool("json", false, "emit JSON")
+	target := fs.String("target", "", "repository root")
+	if len(args) == 0 || (args[0] != "status" && args[0] != "doctor") || fs.Parse(args[1:]) != nil || fs.NArg() != 0 {
+		return installFailure(runtime.out, *asJSON, "", false, "opencode accepts status or doctor only")
+	}
+	binary, err := runtime.executable()
+	if err != nil {
+		return installFailure(runtime.out, *asJSON, "", false, "cannot determine current docmanager executable")
+	}
+	if *target == "" {
+		*target, err = runtime.getwd()
+		if err != nil {
+			return err
+		}
+	}
+	status, err := runtime.openCode(binary, *target).Status(context.Background())
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(runtime.out).Encode(map[string]any{
+		"agent": "opencode", "installed": status.Installed, "supported": status.Supported,
+		"configured": status.Configured, "healthy": status.Healthy,
+	})
 }
 
 func renderInstall(out io.Writer, asJSON bool, result installResult) error {
@@ -186,6 +228,14 @@ func installFailureCode(out io.Writer, asJSON bool, target string, partial bool,
 	stable := &app.StableError{Code: code, Classification: code, Detail: detail}
 	if asJSON {
 		_ = json.NewEncoder(out).Encode(installResult{Operation: "install", Outcome: "failure", Repository: target, Workspace: partial, Error: stable})
+	}
+	return stable
+}
+
+func workspaceInstallFailure(out io.Writer, asJSON bool, target, previous string, err error) error {
+	stable := &app.StableError{Code: "workspace_install", Classification: "workspace_install", Detail: err.Error()}
+	if asJSON {
+		_ = json.NewEncoder(out).Encode(installResult{Operation: "install", Outcome: "failure", Repository: target, WorkspaceState: previous, Error: stable})
 	}
 	return stable
 }

@@ -91,6 +91,9 @@ func TestOpenCodeConfigureStatusAndUnconfigureJSONC(t *testing.T) {
 	if err := a.Configure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if status, err := a.Inspect(context.Background()); err != nil || !status.Configured {
+		t.Fatalf("paired inspection = %#v, %v", status, err)
+	}
 	configured, err := os.ReadFile(config)
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +268,84 @@ func TestOpenCodeExactSchemaConflictAndUnconfigure(t *testing.T) {
 	after, _ := os.ReadFile(config)
 	if string(after) != string(before) {
 		t.Fatal("conflicting entry was overwritten")
+	}
+}
+
+func TestOpenCodeConfiguresOwnedGuidancePair(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "opencode.json")
+	writeAgentFile(t, config, `{"theme":"dark","instructions":["/user/instructions.md"],"mcp":{"other":{"type":"local","command":["other"],"enabled":true}}}`)
+	guide := filepath.Join(root, "workspace", ".docmanager", "guidance", "opencode.md")
+	writeAgentFile(t, guide, "managed guidance\n")
+	identity := NewGuidanceIdentity(guide, "v1", []byte("managed guidance\n"))
+	a := NewOpenCode(OpenCodeOptions{Root: root, Binary: "/opt/docmanager", Guidance: identity, Installed: func() bool { return true }})
+	if err := a.Configure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	configured, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(configured, &document); err != nil {
+		t.Fatal(err)
+	}
+	instructions := document["instructions"].([]any)
+	if len(instructions) != 2 || instructions[0] != "/user/instructions.md" || instructions[1] != identity.Path {
+		t.Fatalf("instructions = %#v", instructions)
+	}
+	if err := a.Configure(context.Background()); err != nil {
+		t.Fatalf("no-op configure: %v", err)
+	}
+	noOp, _ := os.ReadFile(config)
+	if string(noOp) != string(configured) {
+		t.Fatal("matching pair was rewritten")
+	}
+	if err := os.WriteFile(guide, []byte("edited guidance\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Inspect(context.Background()); !errors.Is(err, ErrDrift) {
+		t.Fatalf("drift inspection = %v", err)
+	}
+	if err := os.WriteFile(guide, []byte("managed guidance\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Unconfigure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	removed, _ := os.ReadFile(config)
+	if strings.Contains(string(removed), identity.Path) || strings.Contains(string(removed), `"docmanager"`) || !strings.Contains(string(removed), "/user/instructions.md") || !strings.Contains(string(removed), `"other"`) {
+		t.Fatalf("exact pair removal = %s", removed)
+	}
+}
+
+func TestOpenCodeRefusesIncompleteOrConflictingGuidancePairWithoutWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+	}{
+		{"unsupported instructions", `{"instructions":{},"mcp":{}}`},
+		{"incomplete mcp", `{"instructions":["GUIDANCE"],"mcp":{}}`},
+		{"incomplete instruction", `{"instructions":[],"mcp":{"docmanager":{"type":"local","command":["/opt/docmanager","mcp"],"enabled":true}}}`},
+		{"conflicting instruction", `{"instructions":["/other/guide.md"],"mcp":{"docmanager":{"type":"local","command":["/opt/docmanager","mcp"],"enabled":true}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			guide := filepath.Join(root, "workspace", ".docmanager", "guidance", "opencode.md")
+			writeAgentFile(t, guide, "managed guidance\n")
+			identity := NewGuidanceIdentity(guide, "v1", []byte("managed guidance\n"))
+			content := strings.ReplaceAll(tc.content, "GUIDANCE", identity.Path)
+			config := filepath.Join(root, "opencode.json")
+			writeAgentFile(t, config, content)
+			before, _ := os.ReadFile(config)
+			a := NewOpenCode(OpenCodeOptions{Root: root, Binary: "/opt/docmanager", Guidance: identity})
+			if err := a.Configure(context.Background()); !errors.Is(err, ErrOwnership) && !errors.Is(err, ErrUnsupportedConfig) {
+				t.Fatalf("Configure() = %v", err)
+			}
+			after, _ := os.ReadFile(config)
+			if string(after) != string(before) {
+				t.Fatalf("refusal wrote config:\n%s", after)
+			}
+		})
 	}
 }
 

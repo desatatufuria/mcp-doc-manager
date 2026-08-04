@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"time"
@@ -56,7 +58,11 @@ func (a *OpenCode) Inspect(_ context.Context) (Status, error) {
 	if err != nil {
 		return status, err
 	}
-	status.Configured, err = managedConfig(config, a.options.Binary)
+	if a.options.Guidance.Path != "" {
+		status.Configured, err = managedPairConfig(config, a.options.Binary, a.options.Guidance)
+	} else {
+		status.Configured, err = managedConfig(config, a.options.Binary)
+	}
 	if err != nil {
 		return status, err
 	}
@@ -95,6 +101,9 @@ func (a *OpenCode) mutate(ctx context.Context, configure bool) error {
 		return err
 	}
 	mcp := config["mcp"].(map[string]any)
+	if a.options.Guidance.Path != "" {
+		return a.mutatePair(route, data, config, mcp, configure)
+	}
 	if configure {
 		if current, found := mcp["docmanager"]; found {
 			owned, valid := ownedEntry(current, a.options.Binary)
@@ -129,6 +138,92 @@ func (a *OpenCode) mutate(ctx context.Context, configure bool) error {
 	return atomicWrite(route.path, updated)
 }
 
+func (a *OpenCode) mutatePair(route route, data []byte, config, mcp map[string]any, configure bool) error {
+	if err := validGuidance(a.options.Guidance); err != nil {
+		return err
+	}
+	instructions, _, err := configInstructions(config)
+	if err != nil {
+		return err
+	}
+	entry, hasMCP := mcp["docmanager"]
+	pathIndex := -1
+	for index, value := range instructions {
+		if value == a.options.Guidance.Path {
+			pathIndex = index
+		}
+	}
+	ownedMCP, validMCP := ownedEntry(entry, a.options.Binary)
+	if hasMCP && (!validMCP || !ownedMCP) {
+		return ErrOwnership
+	}
+	if configure {
+		if hasMCP != (pathIndex >= 0) {
+			return ErrOwnership
+		}
+		if hasMCP {
+			return nil
+		}
+		mcp["docmanager"] = map[string]any{"type": "local", "command": []string{a.options.Binary, "mcp"}, "enabled": true}
+		instructions = append(instructions, a.options.Guidance.Path)
+		config["instructions"] = instructions
+	} else {
+		if !hasMCP && pathIndex < 0 {
+			return nil
+		}
+		if !hasMCP || pathIndex < 0 {
+			return ErrOwnership
+		}
+		delete(mcp, "docmanager")
+		config["instructions"] = append(instructions[:pathIndex], instructions[pathIndex+1:]...)
+	}
+	updated, err := encodeConfig(config, filepath.Ext(route.path) == ".jsonc", leadingComments(data))
+	if err != nil {
+		return err
+	}
+	current, err := os.ReadFile(route.path)
+	if err == nil && !sameBytes(current, data) {
+		return ErrDrift
+	}
+	return atomicWrite(route.path, updated)
+}
+
+func configInstructions(config map[string]any) ([]any, bool, error) {
+	raw, found := config["instructions"]
+	if !found {
+		return nil, false, nil
+	}
+	instructions, ok := raw.([]any)
+	if !ok {
+		return nil, false, ErrUnsupportedConfig
+	}
+	for _, value := range instructions {
+		if _, ok := value.(string); !ok {
+			return nil, false, ErrUnsupportedConfig
+		}
+	}
+	return append([]any(nil), instructions...), true, nil
+}
+
+func validGuidance(identity GuidanceIdentity) error {
+	if identity.Path == "" || identity.Version == "" || identity.Digest == "" || !filepath.IsAbs(identity.Path) || filepath.Clean(identity.Path) != identity.Path {
+		return ErrOwnership
+	}
+	info, err := os.Lstat(identity.Path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrOwnership
+	}
+	content, err := os.ReadFile(identity.Path)
+	if err != nil {
+		return ErrOwnership
+	}
+	digest := sha256.Sum256(content)
+	if hex.EncodeToString(digest[:]) != identity.Digest {
+		return ErrDrift
+	}
+	return nil
+}
+
 func (a *OpenCode) probe(parent context.Context) error {
 	if a.options.Run == nil {
 		return nil
@@ -148,6 +243,31 @@ func managedConfig(config map[string]any, binary string) (bool, error) {
 	owned, valid := ownedEntry(current, binary)
 	if !valid || !owned {
 		return false, ErrOwnership
+	}
+	return true, nil
+}
+
+func managedPairConfig(config map[string]any, binary string, guidance GuidanceIdentity) (bool, error) {
+	entry, hasMCP := config["mcp"].(map[string]any)["docmanager"]
+	instructions, _, err := configInstructions(config)
+	if err != nil {
+		return false, err
+	}
+	matches := 0
+	for _, instruction := range instructions {
+		if instruction == guidance.Path {
+			matches++
+		}
+	}
+	if !hasMCP && matches == 0 {
+		return false, nil
+	}
+	owned, valid := ownedEntry(entry, binary)
+	if !hasMCP || matches != 1 || !owned || !valid {
+		return false, ErrOwnership
+	}
+	if err := validGuidance(guidance); err != nil {
+		return false, err
 	}
 	return true, nil
 }

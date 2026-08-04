@@ -126,6 +126,32 @@ func TestDocumentChangePreservesTemporaryRepository(t *testing.T) {
 	}
 }
 
+func TestReceiptEligibilityRequiresReviewAndUnchangedConsideredBytes(t *testing.T) {
+	snapshot := ReceiptSnapshot{Scope: domain.Scope{Kind: domain.ScopeStaged}, ConsideredDocs: map[string]string{"README.md": "one"}, Reviewed: true}
+	for _, tc := range []struct {
+		name  string
+		scope domain.Scope
+		docs  map[string]string
+		want  string
+	}{
+		{"eligible", domain.Scope{Kind: domain.ScopeStaged}, map[string]string{"README.md": "one", "unrelated.txt": "changed"}, "eligible"},
+		{"scope changed", domain.Scope{Kind: domain.ScopeWorktree}, map[string]string{"README.md": "one"}, "scope_changed"},
+		{"considered bytes changed", domain.Scope{Kind: domain.ScopeStaged}, map[string]string{"README.md": "two"}, "considered_bytes_changed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ReceiptEligibility(snapshot, tc.scope, tc.docs); got != tc.want {
+				t.Fatalf("eligibility = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	if got := ReceiptEligibility(ReceiptSnapshot{Scope: snapshot.Scope, ConsideredDocs: snapshot.ConsideredDocs}, snapshot.Scope, snapshot.ConsideredDocs); got != "review_required" {
+		t.Fatalf("unreviewed eligibility = %q", got)
+	}
+	if got := ConsumeReceipt(&snapshot, snapshot.Scope, snapshot.ConsideredDocs); got != "eligible" || ReceiptEligibility(snapshot, snapshot.Scope, snapshot.ConsideredDocs) != "already_verified" {
+		t.Fatalf("receipt consumption = %#v", snapshot)
+	}
+}
+
 type fakeResolver struct {
 	evidence domain.Evidence
 	err      error

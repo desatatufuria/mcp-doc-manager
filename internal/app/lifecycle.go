@@ -24,7 +24,7 @@ func Install(target string) error {
 		if err := ownedState(dir); err != nil {
 			return err
 		}
-		return writeAssets(dir)
+		return writeAssets(dir, true)
 	} else if !os.IsNotExist(err) {
 		return domain.ErrInvalidTarget
 	}
@@ -35,14 +35,14 @@ func Install(target string) error {
 		_ = os.RemoveAll(dir)
 		return domain.ErrLedgerFailure
 	}
-	if err := writeAssets(dir); err != nil {
+	if err := writeAssets(dir, false); err != nil {
 		_ = os.RemoveAll(dir)
 		return err
 	}
 	return nil
 }
 
-func writeAssets(dir string) error {
+func writeAssets(dir string, existing bool) error {
 	for path, payload := range assets.Files {
 		target := filepath.Join(dir, path)
 		if filepath.Clean(target) == dir || !strings.HasPrefix(filepath.Clean(target), dir+string(filepath.Separator)) {
@@ -56,18 +56,41 @@ func writeAssets(dir string) error {
 				return domain.ErrInvalidTarget
 			}
 			content, err := os.ReadFile(target)
-			if err != nil || string(content) != payload {
+			if err != nil {
 				return domain.ErrInvalidTarget
 			}
-			continue
+			if string(content) == payload {
+				continue
+			}
+			if path == assets.OpenCodeGuidance.Path && knownOpenCodeGuidance(string(content)) {
+				if err := os.WriteFile(target, []byte(payload), 0o600); err != nil {
+					return domain.ErrLedgerFailure
+				}
+				continue
+			}
+			if string(content) != payload {
+				return domain.ErrInvalidTarget
+			}
 		} else if !os.IsNotExist(err) {
 			return domain.ErrLedgerFailure
+		}
+		if existing {
+			return domain.ErrInvalidTarget
 		}
 		if err := os.WriteFile(target, []byte(payload), 0o600); err != nil {
 			return domain.ErrLedgerFailure
 		}
 	}
 	return nil
+}
+
+func knownOpenCodeGuidance(content string) bool {
+	for _, snapshot := range assets.OpenCodeGuidanceSnapshots {
+		if content == snapshot.Content {
+			return true
+		}
+	}
+	return false
 }
 
 func validateAssets(dir string) error {

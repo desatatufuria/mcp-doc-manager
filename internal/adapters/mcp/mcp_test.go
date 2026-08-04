@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,7 +78,7 @@ func TestMCPStdioDocumentChangeAndReceipt(t *testing.T) {
 	if err := json.Unmarshal(cliOutput, &cliReport); err != nil || !reflect.DeepEqual(*output.Report, cliReport) {
 		t.Fatalf("CLI/MCP report parity = %#v, %v", cliReport, err)
 	}
-	callMCP(t, ctx, session, "verify_receipt", map[string]any{"repository": repo, "scope": map[string]any{"kind": "staged", "range": ""}, "receipt": output.Report.Receipt})
+	callMCP(t, ctx, session, "verify_receipt", map[string]any{"repository": repo, "scope": map[string]any{"kind": "staged", "range": ""}, "receipt": output.Report.Receipt, "reviewed": true})
 	failed, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "document_change", Arguments: map[string]any{"repository": repo, "scope": map[string]any{"kind": "invalid", "range": ""}}})
 	if err != nil || !failed.IsError {
 		t.Fatalf("invalid scope result = %#v, %v", failed, err)
@@ -114,6 +115,24 @@ func TestMCPDocumentChangeRequiresWorkspaceInitialization(t *testing.T) {
 	_, output, err = documentChange(context.Background(), nil, scopeInput{Repository: repo, Scope: domain.Scope{Kind: domain.ScopeStaged}})
 	if err != nil || output.Report == nil {
 		t.Fatalf("after install = %#v, %v", output, err)
+	}
+}
+
+func TestToolDescriptionsRequireExplicitBoundedReviewWorkflow(t *testing.T) {
+	for _, name := range []string{"document_change", "verify_receipt"} {
+		description := toolDescription(name)
+		for _, required := range []string{"worktree", "staged", "base..head", "read-only", "one", "human review"} {
+			if !strings.Contains(strings.ToLower(description), required) {
+				t.Fatalf("%s description missing %q: %q", name, required, description)
+			}
+		}
+	}
+}
+
+func TestVerifyReceiptRefusesWithoutExplicitHumanReview(t *testing.T) {
+	result, output, err := verifyReceipt(context.Background(), nil, receiptInput{Repository: t.TempDir(), Scope: domain.Scope{Kind: domain.ScopeStaged}})
+	if err != nil || result == nil || !result.IsError || output.Error != domain.ErrUnsupportedRequest.Error() {
+		t.Fatalf("unreviewed verification = %#v, %#v, %v", result, output, err)
 	}
 }
 

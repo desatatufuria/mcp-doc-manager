@@ -21,6 +21,7 @@ type receiptInput struct {
 	Repository string         `json:"repository" jsonschema:"absolute repository root"`
 	Scope      domain.Scope   `json:"scope" jsonschema:"explicit selected Git scope"`
 	Receipt    domain.Receipt `json:"receipt" jsonschema:"receipt returned by document_change"`
+	Reviewed   bool           `json:"reviewed" jsonschema:"explicit human review completed before this one verification call"`
 }
 
 type toolOutput struct {
@@ -35,9 +36,17 @@ func Serve(ctx context.Context) error {
 
 func NewServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "repository-documentation-manager", Version: "1.0.0"}, nil)
-	mcp.AddTool(server, &mcp.Tool{Name: "document_change", Description: "Analyze one explicit Git scope without changing documentation."}, documentChange)
-	mcp.AddTool(server, &mcp.Tool{Name: "verify_receipt", Description: "Verify one content-bound analysis receipt."}, verifyReceipt)
+	mcp.AddTool(server, &mcp.Tool{Name: "document_change", Description: toolDescription("document_change")}, documentChange)
+	mcp.AddTool(server, &mcp.Tool{Name: "verify_receipt", Description: toolDescription("verify_receipt")}, verifyReceipt)
 	return server
+}
+
+func toolDescription(name string) string {
+	base := "Read-only DocManager workflow: select exactly one explicit scope: worktree (unstaged changes), staged (index changes), or base..head range. Make one analysis call only for a documentation-impact review; never infer scope, edit files, manage lifecycle, or use for routine coding. Human review is required before receipt verification."
+	if name == "verify_receipt" {
+		return base + " Verify at most one reviewed receipt only when its scope and considered documentation bytes are unchanged; otherwise re-analyze."
+	}
+	return base
 }
 
 func documentChange(ctx context.Context, _ *mcp.CallToolRequest, input scopeInput) (*mcp.CallToolResult, toolOutput, error) {
@@ -61,6 +70,9 @@ func documentChange(ctx context.Context, _ *mcp.CallToolRequest, input scopeInpu
 }
 
 func verifyReceipt(ctx context.Context, _ *mcp.CallToolRequest, input receiptInput) (*mcp.CallToolResult, toolOutput, error) {
+	if !input.Reviewed {
+		return failure(domain.ErrUnsupportedRequest)
+	}
 	if err := validateScope(input.Scope); err != nil {
 		return failure(err)
 	}

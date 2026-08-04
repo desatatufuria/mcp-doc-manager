@@ -50,7 +50,8 @@ Verification accepts only the exact, successful analysis whose selected Git cont
 | `docmanager verify ...` | Recheck a content-bound receipt without an LLM or repository mutation. |
 | `docmanager mcp` | Start the stdio MCP server. |
 | `docmanager mcp --version` | Print the installed version without starting MCP. |
-| `docmanager install [--target /repo] [--agent opencode] [--yes]` | Initialize the exact Git root and configure the detected OpenCode MCP entry. |
+| `docmanager install [--target /repo] [--agent opencode] [--yes]` | Initialize the exact Git root and configure the owned OpenCode MCP/instruction pair. |
+| `docmanager opencode status\|doctor [--target /repo] [--json]` | Read-only OpenCode capability, ownership, guidance, and bounded-probe inspection. |
 | `docmanager workspace install --target /repo` | Low-level repository initialization; add a hook only with `--enable-hook`. |
 | `docmanager workspace doctor --target /repo` | Validate Git and owned local assets without changing them. |
 | `docmanager workspace uninstall --target /repo` | Remove only owned `.docmanager/` state. |
@@ -69,7 +70,9 @@ MCP does not expose install, uninstall, patch, commit, or documentation-write to
 
 ## Lifecycle and pre-push receipts
 
-`install` guides OpenCode onboarding: it initializes the owned `.docmanager/` directory and SQLite ledger, then adds the local MCP entry to OpenCode. It refuses symlinked, unowned, altered, or conflicting state. The pre-push hook remains disabled unless `--enable-hook` is explicit. `doctor` is read-only; `uninstall` removes only repository state carrying the ownership marker and does not unconfigure OpenCode.
+`install` guides OpenCode onboarding: it initializes the owned `.docmanager/` directory and SQLite ledger, then adds the local MCP entry and the exact absolute `.docmanager/guidance/opencode.md` instruction reference to OpenCode. It preserves unrelated configuration, treats the matching pair as a no-op, and refuses symlinked, unowned, altered, or conflicting state. `docmanager opencode status` and `doctor` inspect only this OpenCode boundary without repair. The pre-push hook remains disabled unless `--enable-hook` is explicit.
+
+For daily use, OpenCode guidance requires one caller-selected `worktree`, `staged`, or two-dot `base..head` scope and makes one read-only `document_change` checkpoint. Review that result yourself before at most one unchanged `verify_receipt`; a changed scope or considered documentation byte requires a new analysis and review. The guidance does not infer scope, edit documentation, mutate user instructions or `AGENTS.md`, manage MCP lifecycle, enable hooks, configure other agents, or perform release work. To roll back the OpenCode integration, remove only the exact owned MCP/instruction pair; retain `.docmanager` and user configuration.
 
 The installed pre-push configuration invokes `docmanager hook-verify`. It reads normal Git pre-push update records, resolves each non-deletion update, and requires a stored receipt that exactly verifies current content. The embedded default is `warn`: ambiguous hook input warns, while a missing, stale, tampered, or mismatched receipt fails verification. Use `--mode fail` only when your team intends to enforce ambiguous-input failure as well.
 

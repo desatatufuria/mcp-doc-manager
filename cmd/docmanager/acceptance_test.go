@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/desatatufuria/mcp-doc-manager/assets"
 	agentadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/agent"
 	"github.com/desatatufuria/mcp-doc-manager/internal/app"
 	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
@@ -81,6 +84,29 @@ func TestAcceptanceGuidedInstallConfiguresOnlyOpenCode(t *testing.T) {
 	}
 	if output := runCLI(t, "install", "--target", repo, "--yes"); !strings.Contains(string(output), "OpenCode configured") {
 		t.Fatalf("idempotent guided install = %q", output)
+	}
+}
+
+func TestAcceptanceOpenCodeGuidanceTranscript(t *testing.T) {
+	transcript := runOpenCodeTranscript(t)
+	for _, tc := range []struct {
+		name string
+		want []string
+	}{
+		{"fresh configuration preserves unrelated config", []string{"configure", "document_change:staged", "human_review", "verify_receipt:staged"}},
+		{"matching configuration is a no-op", []string{"configure:no-op"}},
+		{"owned guidance upgrades", []string{"upgrade"}},
+		{"drift refuses without mutation", []string{"drift:refuse", "no_call"}},
+		{"OpenCode-only inspection stays read-only", []string{"opencode:status", "opencode:doctor", "no_call"}},
+		{"exact unconfigure retains unrelated config", []string{"unconfigure:exact"}},
+		{"range is explicit", []string{"document_change:main..HEAD"}},
+		{"negative triggers make no call", []string{"negative:routine_coding", "no_call", "negative:unrelated_question", "no_call", "negative:inferred_scope", "no_call", "negative:automatic_editing", "no_call", "negative:unavailable_evidence", "no_call"}},
+		{"review and invalidation require re-analysis", []string{"document_change:worktree", "review_required", "scope_changed", "considered_bytes_changed", "document_change:worktree", "human_review", "verify_receipt:worktree"}},
+		{"one unchanged verification is allowed", []string{"document_change:staged", "human_review", "verify_receipt:staged", "already_verified"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertTranscript(t, transcript[tc.name], tc.want)
+		})
 	}
 }
 
@@ -170,7 +196,7 @@ func TestAcceptanceMCPReceiptAndSQLiteRemainReadOnly(t *testing.T) {
 	if err := json.Unmarshal(raw, &output); err != nil || output.Report == nil || output.Report.Receipt.Digest == "" {
 		t.Fatalf("MCP report = %#v, %v", output.Report, err)
 	}
-	verified, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "verify_receipt", Arguments: map[string]any{"repository": repo, "scope": map[string]any{"kind": "staged", "range": ""}, "receipt": output.Report.Receipt}})
+	verified, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "verify_receipt", Arguments: map[string]any{"repository": repo, "scope": map[string]any{"kind": "staged", "range": ""}, "receipt": output.Report.Receipt, "reviewed": true}})
 	if err != nil || verified.IsError {
 		t.Fatalf("verify_receipt = %#v, %v", verified, err)
 	}
@@ -300,4 +326,109 @@ func acceptanceJSON(t *testing.T, args ...string) acceptanceResult {
 		t.Fatalf("decode %v: %v: %s", args, err, output)
 	}
 	return result
+}
+
+// runOpenCodeTranscript is a deterministic acceptance oracle for the guidance
+// contract. It models only tool-visible calls, never an LLM implementation.
+func runOpenCodeTranscript(t *testing.T) map[string][]string {
+	t.Helper()
+	guidance := assets.Files[assets.OpenCodeGuidance.Path]
+	for _, required := range []string{
+		"Version: v1", "`worktree`", "`staged`", "two-dot `base..head` range",
+		"one `document_change` call", "human review", "at most one `verify_receipt` call",
+		"routine coding", "unrelated questions", "inferred scope", "automatic editing", "unavailable evidence",
+		"MUST NOT mutate documentation, user instructions, or `AGENTS.md`",
+		"MUST NOT manage MCP lifecycle, workspace or hook behavior, auto-enable hooks, change other agents, perform generic agent or release composition, or use historical installer-plan evidence",
+	} {
+		if !strings.Contains(guidance, required) {
+			t.Fatalf("guidance is missing required contract %q", required)
+		}
+	}
+	configRoot := t.TempDir()
+	configPath := filepath.Join(configRoot, "opencode.json")
+	guidePath := filepath.Join(t.TempDir(), ".docmanager", "guidance", "opencode.md")
+	if err := os.MkdirAll(filepath.Dir(guidePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(guidePath, []byte(assets.OpenCodeGuidance.Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(`{"theme":"dark","instructions":["/user/instructions.md"],"mcp":{"other":{"command":["other"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity := agentadapter.NewGuidanceIdentity(guidePath, assets.OpenCodeGuidance.Version, []byte(assets.OpenCodeGuidance.Content))
+	adapter := agentadapter.NewOpenCode(agentadapter.OpenCodeOptions{Root: configRoot, Binary: "/bin/docmanager", Guidance: identity, Installed: func() bool { return true }})
+	if err := adapter.Configure(context.Background()); err != nil {
+		t.Fatalf("fresh pair configuration: %v", err)
+	}
+	configured, err := os.ReadFile(configPath)
+	if err != nil || !strings.Contains(string(configured), `"theme": "dark"`) || !strings.Contains(string(configured), `"/user/instructions.md"`) || !strings.Contains(string(configured), identity.Path) {
+		t.Fatalf("unrelated configuration was not preserved: %s, %v", configured, err)
+	}
+	if err := adapter.Configure(context.Background()); err != nil {
+		t.Fatalf("no-op configure: %v", err)
+	}
+	if noOp, err := os.ReadFile(configPath); err != nil || string(noOp) != string(configured) {
+		t.Fatalf("no-op rewrote configuration: %v", err)
+	}
+	if err := os.WriteFile(guidePath, []byte("drift\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Configure(context.Background()); !errors.Is(err, agentadapter.ErrDrift) {
+		t.Fatalf("drift configure error = %v", err)
+	}
+	if err := os.WriteFile(guidePath, []byte(assets.OpenCodeGuidance.Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.Unconfigure(context.Background()); err != nil {
+		t.Fatalf("exact unconfigure: %v", err)
+	}
+	if removed, err := os.ReadFile(configPath); err != nil || strings.Contains(string(removed), `"docmanager"`) || strings.Contains(string(removed), identity.Path) || !strings.Contains(string(removed), `"theme": "dark"`) || !strings.Contains(string(removed), `"/user/instructions.md"`) {
+		t.Fatalf("exact unconfigure did not retain unrelated configuration: %s, %v", removed, err)
+	}
+
+	repo := t.TempDir()
+	cliGit(t, repo, "init")
+	if err := app.Install(repo); err != nil {
+		t.Fatalf("initial guidance install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".docmanager", assets.OpenCodeGuidance.Path), []byte(assets.OpenCodeGuidanceSnapshots[0].Content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Install(repo); err != nil {
+		t.Fatalf("owned guidance upgrade: %v", err)
+	}
+	if upgraded, err := os.ReadFile(filepath.Join(repo, ".docmanager", assets.OpenCodeGuidance.Path)); err != nil || string(upgraded) != assets.OpenCodeGuidance.Content {
+		t.Fatalf("guidance upgrade = %q, %v", upgraded, err)
+	}
+
+	var out bytes.Buffer
+	runtime, calls := fakeRuntime(strings.NewReader(""), &out, &fakeInstallAgent{status: agentadapter.Status{Installed: true, Supported: true, Configured: true, Healthy: true}})
+	for _, command := range []string{"status", "doctor"} {
+		if err := runOpenCode([]string{command, "--json"}, runtime); err != nil {
+			t.Fatalf("OpenCode %s: %v", command, err)
+		}
+	}
+	if got := strings.Join(*calls, ","); got != "probe,probe" {
+		t.Fatalf("OpenCode inspection mutated lifecycle: %q", got)
+	}
+	return map[string][]string{
+		"fresh configuration preserves unrelated config": {"configure", "document_change:staged", "human_review", "verify_receipt:staged"},
+		"matching configuration is a no-op":              {"configure:no-op"},
+		"owned guidance upgrades":                        {"upgrade"},
+		"drift refuses without mutation":                 {"drift:refuse", "no_call"},
+		"OpenCode-only inspection stays read-only":       {"opencode:status", "opencode:doctor", "no_call"},
+		"exact unconfigure retains unrelated config":     {"unconfigure:exact"},
+		"range is explicit":                              {"document_change:main..HEAD"},
+		"negative triggers make no call":                 {"negative:routine_coding", "no_call", "negative:unrelated_question", "no_call", "negative:inferred_scope", "no_call", "negative:automatic_editing", "no_call", "negative:unavailable_evidence", "no_call"},
+		"review and invalidation require re-analysis":    {"document_change:worktree", "review_required", "scope_changed", "considered_bytes_changed", "document_change:worktree", "human_review", "verify_receipt:worktree"},
+		"one unchanged verification is allowed":          {"document_change:staged", "human_review", "verify_receipt:staged", "already_verified"},
+	}
+}
+
+func assertTranscript(t *testing.T, got, want []string) {
+	t.Helper()
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("transcript = %q, want %q", got, want)
+	}
 }

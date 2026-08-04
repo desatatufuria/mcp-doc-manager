@@ -3,6 +3,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 )
@@ -30,4 +32,12 @@ type OpenCodeOptions struct {
 	Run          func(ctx context.Context, argv ...string) error
 	ProbeTimeout time.Duration
 	Provenance   string
+	Guidance     GuidanceIdentity
+}
+
+type GuidanceIdentity struct{ Path, Version, Digest string }
+
+func NewGuidanceIdentity(path, version string, content []byte) GuidanceIdentity {
+	digest := sha256.Sum256(content)
+	return GuidanceIdentity{Path: path, Version: version, Digest: hex.EncodeToString(digest[:])}
 }

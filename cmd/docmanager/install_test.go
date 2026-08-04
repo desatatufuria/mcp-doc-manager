@@ -112,9 +112,72 @@ func TestInstallEnablesHookOnlyWhenExplicit(t *testing.T) {
 	}
 }
 
+func TestInstallReportsRetainedWorkspaceOnDownstreamFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent *fakeInstallAgent
+		want  string
+	}{
+		{name: "configuration", agent: &fakeInstallAgent{status: agentadapter.Status{Installed: true, Supported: true}, configureErr: errors.New("refused")}, want: "retained"},
+		{name: "probe", agent: &fakeInstallAgent{status: agentadapter.Status{Installed: true, Supported: true}, statusErr: errors.New("probe failed")}, want: "retained"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			runtime, _ := fakeRuntime(strings.NewReader(""), &out, tc.agent)
+			if err := runInstall([]string{"--yes", "--json"}, runtime); err == nil {
+				t.Fatal("expected partial installation failure")
+			}
+			var result installResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil || result.WorkspaceState != tc.want {
+				t.Fatalf("result = %#v, %v", result, err)
+			}
+		})
+	}
+}
+
+func TestInstallProbeFailureCompensatesOnlyNewConfiguration(t *testing.T) {
+	var out bytes.Buffer
+	agent := &fakeInstallAgent{status: agentadapter.Status{Installed: true, Supported: true}, statusErr: errors.New("probe failed")}
+	runtime, order := fakeRuntime(strings.NewReader(""), &out, agent)
+	if err := runInstall([]string{"--yes"}, runtime); err == nil {
+		t.Fatal("expected partial installation failure")
+	}
+	if got := strings.Join(*order, ","); got != "workspace,configure,probe,unconfigure" {
+		t.Fatalf("operation order = %q", got)
+	}
+}
+
+func TestInstallProbeFailureRetainsPreexistingConfiguration(t *testing.T) {
+	var out bytes.Buffer
+	agent := &fakeInstallAgent{status: agentadapter.Status{Installed: true, Supported: true, Configured: true}, statusErr: errors.New("probe failed")}
+	runtime, order := fakeRuntime(strings.NewReader(""), &out, agent)
+	if err := runInstall([]string{"--yes"}, runtime); err == nil {
+		t.Fatal("expected partial installation failure")
+	}
+	if got := strings.Join(*order, ","); got != "workspace,configure,probe" {
+		t.Fatalf("operation order = %q", got)
+	}
+}
+
+func TestOpenCodeInspectionIsReadOnlyAndBounded(t *testing.T) {
+	var out bytes.Buffer
+	agent := &fakeInstallAgent{status: agentadapter.Status{Installed: true, Supported: true, Configured: true, Healthy: true}}
+	runtime, order := fakeRuntime(strings.NewReader(""), &out, agent)
+	if err := runOpenCode([]string{"status", "--json"}, runtime); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(*order, ","); got != "probe" {
+		t.Fatalf("status operation order = %q", got)
+	}
+	if !strings.Contains(out.String(), `"agent":"opencode"`) || !strings.Contains(out.String(), `"healthy":true`) {
+		t.Fatalf("status output = %q", out.String())
+	}
+}
+
 type fakeInstallAgent struct {
 	status       agentadapter.Status
 	configureErr error
+	statusErr    error
 	order        *[]string
 }
 
@@ -129,7 +192,11 @@ func (a *fakeInstallAgent) Status(context.Context) (agentadapter.Status, error) 
 	*a.order = append(*a.order, "probe")
 	status := a.status
 	status.Configured, status.Healthy = true, true
-	return status, nil
+	return status, a.statusErr
+}
+func (a *fakeInstallAgent) Unconfigure(context.Context) error {
+	*a.order = append(*a.order, "unconfigure")
+	return nil
 }
 
 func fakeRuntime(in io.Reader, out io.Writer, agent *fakeInstallAgent) (installRuntime, *[]string) {
@@ -152,7 +219,7 @@ func fakeRuntime(in io.Reader, out io.Writer, agent *fakeInstallAgent) (installR
 			}
 			return app.WorkspaceStatus{Root: target, State: "installed", Hook: state}, nil
 		},
-		openCode: func(string) installAgent { return agent },
+		openCode: func(string, string) installAgent { return agent },
 	}, &order
 }
 
