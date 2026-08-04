@@ -28,9 +28,10 @@ No `size:exception`: every child is capped at 400 additions+deletions.
 | 2a2.2 | Stage/scope safety | base=completed 2a2.1c oracle branch | `go test ./internal/adapters/git -run 'Test.*(Unmerged|Staged|Unborn|EmptyIndex|CommitA)'` | unmerged/staged/unborn/initial/empty-index/`commit -a` oracle | stage identity/output hunks |
 | 2b | Planning service | base=2a2.2 branch | `go test ./internal/app` | radiography→bounded plan | service/tests only |
 | 2c | MCP staging | base=2b branch | `go test ./internal/adapters/mcp` | stdio radiography→plan | MCP adapter/tests only |
-| 3 | Catalog | base=2c branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
+| 3a | Catalog import and evidence | base=2c branch | `go test ./internal/app -run 'TestCatalogService'` | in-memory catalog service | catalog import/evidence only |
+| 3b | Catalog persistence and verification | base=3a branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
 
-Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→2a2.1c oracle→2a2.2→2b→2c→3; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
+Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→2a2.1c oracle→2a2.2→2b→2c→3a→3b; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
 
 ## Unit 1
 
@@ -99,13 +100,16 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 - [x] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
 
-## Unit 3: Catalog (base=completed 2c)
+## Unit 3a: Catalog Import & Evidence (base=completed 2c)
 
-- [ ] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
-- [ ] 3.2 RED: evidenced update/review/orphan/conflict/no-action, never truthfulness.
-- [ ] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
-- [ ] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
-- [ ] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
+- [x] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
+- [x] 3.2 RED: evidenced update/review/orphan/conflict/no-action, never truthfulness.
+
+## Unit 3b: Catalog Persistence & Verification (base=completed 3a)
+
+- [x] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
+- [x] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
+- [x] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
 
 ## Unit 2 Mapping
 
