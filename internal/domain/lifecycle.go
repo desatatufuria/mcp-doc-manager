@@ -1,11 +1,22 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"reflect"
+)
 
 var (
-	ErrLifecycle                = errors.New("lifecycle_failure")
-	ErrAuthorizationInvalidated = errors.New("authorization_invalidated")
-	ErrIdempotencyConflict      = errors.New("idempotency_conflict")
+	ErrLifecycle                          = errors.New("lifecycle_failure")
+	ErrAuthorizationInvalidated           = errors.New("authorization_invalidated")
+	ErrIdempotencyConflict                = errors.New("idempotency_conflict")
+	ErrLegacyIdempotencyReplayUnavailable = errors.New("legacy_idempotency_replay_unavailable")
+)
+
+type IdempotencyReplayState string
+
+const (
+	IdempotencyAvailable         IdempotencyReplayState = "available"
+	IdempotencyLegacyUnavailable IdempotencyReplayState = "legacy_unavailable"
 )
 
 type LifecycleState string
@@ -26,11 +37,7 @@ const (
 )
 
 func CanTransition(from, to LifecycleState) bool {
-	return (from == RadiographyDraft && (to == RadiographyConfirmed || to == RadiographyRejected)) ||
-		(from == PlanProposed && (to == PlanApproved || to == PlanRefused)) ||
-		(from == PlanApproved && to == PlanDrifted) ||
-		(from == BatchProposed && (to == BatchAuthorized || to == BatchRejected)) ||
-		(from == BatchAuthorized && (to == BatchReported || to == BatchVerified)) || (from == BatchReported && to == BatchVerified)
+	return (from == RadiographyDraft && (to == RadiographyConfirmed || to == RadiographyRejected)) || (from == PlanProposed && (to == PlanApproved || to == PlanRefused)) || (from == PlanApproved && to == PlanDrifted) || (from == BatchProposed && (to == BatchAuthorized || to == BatchRejected)) || (from == BatchAuthorized && to == BatchReported) || (from == BatchReported && to == BatchVerified)
 }
 
 type ActionKind string
@@ -52,37 +59,121 @@ type Authorization struct {
 	Scope                                 Scope
 	Baseline, Evidence                    string
 	Allowed                               []PlannedAction
-	Active                                bool
+	Active, Completed                     bool
 }
 
 func (a Authorization) Validate(current Authorization) error {
-	if !a.Active || !current.Active || a.PlanRevision != current.PlanRevision || a.PolicyRevision != current.PolicyRevision || a.Scope != current.Scope || a.Baseline != current.Baseline || a.Evidence != current.Evidence {
+	if !a.Active || a.Completed || !current.Active || current.Completed || a.BatchID != current.BatchID || a.PlanRevision != current.PlanRevision || a.PolicyRevision != current.PolicyRevision || a.Scope != current.Scope || a.Baseline != current.Baseline || a.Evidence != current.Evidence || !reflect.DeepEqual(a.Allowed, current.Allowed) {
 		return ErrAuthorizationInvalidated
 	}
 	return nil
 }
 
-type Provenance struct{ DeclaredActor, Interaction, Context string }
+type ProvenanceAuthority string
+
+const DeclaredLocalProvenance ProvenanceAuthority = "declared_local_provenance"
+
+type Provenance struct {
+	Authority                                                                                                                  ProvenanceAuthority
+	DeclaredActor, Interaction, Context, Operation, Request, IdempotencyKey, Time, Approval, Evidence, Input, Result, Versions string
+}
 
 func (p Provenance) Validate() error {
-	if p.DeclaredActor == "" || p.Interaction == "" || p.Context == "" {
+	if p.Authority != DeclaredLocalProvenance || p.DeclaredActor == "" || p.Interaction == "" || p.Context == "" || p.Operation == "" || p.Request == "" || p.IdempotencyKey == "" || p.Time == "" || p.Approval == "" || p.Evidence == "" || p.Input == "" || p.Result == "" || p.Versions == "" {
 		return ErrLifecycle
 	}
 	return nil
 }
 
+type CatalogState string
+
+const (
+	CatalogImported  CatalogState = "imported"
+	CatalogActive    CatalogState = "active"
+	CatalogStale     CatalogState = "stale"
+	CatalogUncertain CatalogState = "uncertain"
+	CatalogOrphan    CatalogState = "orphan"
+	CatalogArchived  CatalogState = "archived"
+)
+
+type AuditState string
+
+const (
+	AuditRunning  AuditState = "running"
+	AuditReported AuditState = "reported"
+)
+
+type AuditResult string
+
+const (
+	AuditUpdate   AuditResult = "update"
+	AuditReview   AuditResult = "review"
+	AuditOrphan   AuditResult = "orphan"
+	AuditConflict AuditResult = "conflict"
+	AuditNoAction AuditResult = "no_action"
+)
+
+type PendingActionState string
+
+const (
+	PendingOpen      PendingActionState = "open"
+	PendingApproved  PendingActionState = "approved"
+	PendingRefused   PendingActionState = "refused"
+	PendingCompleted PendingActionState = "completed"
+	PendingCancelled PendingActionState = "cancelled"
+)
+
+type VerificationState string
+
+const (
+	VerificationPending  VerificationState = "pending"
+	VerificationVerified VerificationState = "verified"
+	VerificationMismatch VerificationState = "mismatch"
+	VerificationStale    VerificationState = "stale"
+)
+
 type CatalogEntry struct {
 	Path, Purpose, Audience, Owner, Evidence string
+	Digest                                   string
 	RelatedAreas                             []string
-	State                                    LifecycleState
+	State                                    CatalogState
 	LastVerification                         string
-	PendingActions                           []string
+	PendingActions                           []PendingAction
+}
+type CatalogImport struct {
+	Path, Digest string
+	Provenance   Provenance
+}
+type InitialPolicy struct {
+	Revision, Mode string
+	Approved       bool
+}
+type CatalogWrite struct {
+	Request, Result string
+	Provenance      Provenance
+	Entries         []CatalogEntry
+	Imports         []CatalogImport
+	Policy          InitialPolicy
+}
+type CatalogAuditWrite struct {
+	Request, Result string
+	Provenance      Provenance
+	Entries         []CatalogEntry
+	Audits          []Audit
+	Actions         []PendingAction
 }
 type Audit struct {
-	State               LifecycleState
-	Evidence, Rationale string
+	ID, Trigger, Path, Scope string
+	State                    AuditState
+	Result                   AuditResult
+	Evidence, Rationale      string
+}
+type PendingAction struct {
+	ID, Path, AuditID string
+	State             PendingActionState
+	Evidence          string
 }
 type Verification struct {
-	State    LifecycleState
+	State    VerificationState
 	Evidence string
 }
