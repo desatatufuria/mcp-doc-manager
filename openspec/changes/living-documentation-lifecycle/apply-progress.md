@@ -344,3 +344,189 @@ This section supplements and preserves the original Unit 1 attempt and settlemen
 - Exact child accounting against `0a53039`: 174 additions + 3 deletions = 177 changed lines, within the 400-line ceiling.
 - Changed paths are limited to `internal/adapters/git/resolver_test.go`, `openspec/changes/living-documentation-lifecycle/tasks.md`, and this cumulative progress artifact.
 - No Unit 2b or later work was implemented.
+
+## Unit 2b Planning Service (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. The planning service creates an unpersisted, radiography-bound plan, policy, batch, authorization, and declared-local provenance; it does not author visible files.
+- Parent-owned native token `sha256:7a09a69a11e3547b37823e61c1e63709c2a30dce82a3f23325519c1b57a26b32` was neither acquired, reset, nor settled.
+- Work unit: `unit-2b-planning-service`; feature-branch-chain child targets immediate parent PR #11 commit `ac7e012`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.16 | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app -count=1` — exit 0; package passed | `go test ./internal/app -run 'TestPlanningService' -count=1` — exit 1; `PlanningService`, request, policy, and denial symbols undefined | focused command — exit 0; 4 top-level tests and 3 policy/action subtests passed | confirmed radiography, two denial paths, automatic content actions, approved/unapproved structural actions, and in-place inventory treatment | `gofmt -w`; focused pass |
+| 2.17 | `internal/app/lifecycle_service.go` / unit | same package baseline | task 2.16 missing-service RED gate | focused command — exit 0; radiography identity binds plan, batch, policy, authorization, and provenance | approval-required versus automatic policy plus structural-action approval boundary | compact pure validation helpers; focused pass |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestPlanningService' -count=1 -v` — exit 0; 4 top-level tests and 3 nested policy/action subtests passed. |
+| Runtime harness | `go test ./internal/app -run 'TestPlanningService' -count=1 -v` — exit 0; service invokes its radiography boundary and produces only in-memory planning results. No visible-write boundary exists in this service. |
+| Related regressions | `go test ./internal/app ./internal/domain ./internal/adapters/sqlite -count=1`; `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/mcp -count=1` — all exit 0. |
+| Full / checks | `go test ./...`; `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; `git diff --check` — all exit 0; full suite passed 9 tested packages and `assets` had no test files. |
+| Rollback boundary | Revert only `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, tasks 2.16–2.17 checkboxes, and this cumulative progress section; 2a2.2 resolver safety and all MCP/catalog work remain intact. |
+
+### Delivery and Scope
+
+- Changed-line accounting against `ac7e012`: recorded in the corrective rerun below.
+- Changed paths are limited to the planning service/test and required OpenSpec task/progress evidence.
+- Unit 2c MCP staging and Unit 3 catalog work remain unimplemented.
+
+### Gatekeeper Corrective Rerun: Existing-Document Treatment
+
+- Outcome: passed. Every discovered document is represented by an explicit `in_place_inventory` treatment, including a confirmed plan with no content actions.
+- Parent-owned correction token `sha256:fe29ef72ed17623f3ed5e3641db51ad846fc3e0767abd9ef82d26da55eb34f69` was neither acquired, reset, nor settled.
+- Scope: Unit 2b only; no authoring, persistence, MCP staging, or catalog behavior was added.
+
+| Task | RED | GREEN | REFACTOR |
+|---|---|---|---|
+| 2.16–2.17 correction | `go test ./internal/app -run 'TestPlanningServiceTreatsExistingDocumentsInPlaceWithoutContentAction' -count=1 -v` — exit 1; `ExistingDocumentTreatment` and `InPlaceInventory` undefined | same test — exit 0; one test passed after the minimal in-place treatment model and zero-action validation | `gofmt -w internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; focused suite exit 0 |
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestPlanningService' -count=1 -v` — exit 0; 4 top-level tests and 3 nested policy/action subtests passed. |
+| Runtime harness | Same focused command — exit 0; fake radiography produces in-memory planning results only; no visible-write or persistence boundary exists. |
+| Related/full/check | `go test ./internal/app ./internal/domain ./internal/adapters/sqlite -count=1`; `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/mcp -count=1`; `go test ./...`; `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; `git diff --check` — all exit 0. |
+| Rollback boundary | Revert `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, and this Unit 2b evidence; it removes only planning-service in-place treatment and preserves prior 2a2.2 work. |
+
+- Correction actor baseline: unavailable; the parent supplied no correction baseline tree, so actor churn cannot be calculated truthfully.
+- Final child accounting against `ac7e012`: 349 additions + 2 deletions = 351 changed lines, within the 400-line ceiling.
+
+## Unit 2c MCP Staging (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. MCP now exposes read-only `radiograph` and unpersisted `propose_plan` tools, wiring the Unit 2b planning service through stdio without visible writes or lifecycle persistence.
+- Parent-supplied native runtime acquire state: `proceed`; token `sha256:f007d42a0b6d63c94b59e252dcf3875d211cc0351978eadea3376ca0baad4431` was not acquired, reset, or settled by this child.
+- Work unit: `unit-2c-mcp-staging`; feature-branch-chain child starts at immediate parent PR #12 commit `4e0d959`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 2.18 | `internal/adapters/mcp/mcp_test.go` / MCP stdio integration | `go test ./internal/adapters/mcp -count=1` — exit 0; package passed | `go test ./internal/adapters/mcp -run 'TestMCPStdioRadiographyToPlanWithoutVisibleWrites' -count=1 -v` — exit 1; `toolOutput.Radiography` and `toolOutput.Planning` undefined | same focused command — exit 0; stdio radiography→approved bounded plan and denied structural plan passed | confirmed radiography/in-place inventory plus unapproved automatic structural action denial; both preserve README, Git status, and absent `.docmanager` | `gofmt -w internal/adapters/mcp/mcp.go internal/adapters/mcp/mcp_test.go`; focused MCP stdio tests exit 0 |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/adapters/mcp -run 'TestMCP(StdioDocumentChangeAndReceipt|StdioRadiographyToPlanWithoutVisibleWrites)' -count=1 -v` — exit 0; 2 stdio MCP tests passed. |
+| Runtime harness | Same focused command — exit 0; launches `go run ../../../cmd/docmanager mcp`, lists staged tools, exercises real temporary Git radiography→plan and denied structural conflict, and proves README/Git status unchanged with no `.docmanager` directory. |
+| Planning and resolver regressions | `go test ./internal/app -run 'TestPlanningService' -count=1 -v`; `go test ./internal/adapters/git -count=1` — exit 0; 4 planning tests with 3 nested policy/action tests and the resolver package passed. |
+| Domain/SQLite compatibility | `go test ./internal/domain ./internal/adapters/sqlite -count=1` — exit 0; 2 packages passed. |
+| Full/check-only | `go test ./...`; `gofmt -l internal/adapters/mcp/mcp.go internal/adapters/mcp/mcp_test.go`; `git diff --check` — exit 0; full suite passed and formatting/check produced no output. |
+| Rollback boundary | Revert only `internal/adapters/mcp/mcp.go`, `internal/adapters/mcp/mcp_test.go`, task 2.18, and this cumulative progress section; this removes MCP planning staging while preserving Unit 2b and all Unit 3 catalog/verification work remains absent. |
+
+### Delivery and Scope
+
+- Tools added: `radiograph` and `propose_plan`; `propose_plan` uses the completed `app.PlanningService`, preserves its bounded actions, denial semantics, and declared-local provenance, and has no SQLite/authoring path.
+- Unit 3 catalog, persistence, audit, authorization verification, and idempotency behavior remain unimplemented.
+- Exact child accounting against `4e0d959`: 186 additions + 7 deletions = 193 changed lines; this is within the 400-line ceiling.
+
+## Unit 3a Catalog Import & Evidence (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. `CatalogService` derives in-memory catalog entries and evidence-backed audit treatments; it does not persist lifecycle state, author visible documents, expose MCP behavior, or implement `VerifyOutcome`.
+- Parent-supplied native runtime acquire state: `proceed`; token `sha256:c4b96469110041cc4130b2644b61eb314bdaca9c928b4798430fa0e90e9006d2` was not acquired, reset, or settled by this child.
+- Work unit: `unit-3a-catalog-import-evidence`; feature-branch-chain child starts at immediate parent PR #13 commit `7e2e0fb`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 3.1 | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app -count=1` — exit 0; package passed | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 1; catalog service/import/assessment symbols undefined | same command — exit 0; import, provenance, stale, uncertain, and orphan scenarios passed | approved in-place import plus three distinct evidence states | `gofmt -w`; focused suite passed |
+| 3.2 | `internal/app/lifecycle_service_test.go` / unit | same package baseline | same missing-symbol RED gate | same command — exit 0; evidenced update, review, orphan, conflict, and no-action scenarios passed | five treatments plus missing-evidence refusal | compact pure in-memory service; focused suite passed |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 0; 3 top-level tests and 8 treatment subtests passed. |
+| Runtime harness | N/A — Unit 3a has no runtime boundary: `CatalogService` is a pure in-memory application service with no filesystem, SQLite, Git, or MCP dependency. |
+| Regressions | `go test ./internal/app -count=1 -v`; `go test ./internal/domain ./internal/adapters/sqlite -count=1`; `go test ./internal/adapters/git -count=1`; `go test ./internal/adapters/mcp -count=1` — all exit 0. |
+| Full / checks | `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files. `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go`; `git diff --check` — exit 0/no output. |
+| Rollback boundary | Revert only `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, tasks 3.1–3.2 and this Unit 3a progress section; this removes in-memory catalog import/evidence behavior while preserving Units 1–2c and leaving Unit 3b persistence, verification, and MCP work absent. |
+
+### Delivery and Scope
+
+- Tasks 3.1–3.2 are complete and Unit 3 is explicitly split into 3a (this child) and 3b (tasks 3.3–3.5) without changing requirements.
+- Exact child accounting against `7e2e0fb`: 199 additions + 6 deletions = 205 changed lines, within the 400-line ceiling.
+- `VerifyOutcome`, catalog persistence/audit storage, idempotent MCP, final verification, and any visible-document mutation are deferred to Unit 3b.
+
+### Gatekeeper Corrective Rerun: Import Provenance and Deferred Verification
+
+#### Result Contract
+
+- Outcome: passed.
+- Parent-supplied native acquire state: `proceed`; token `sha256:eadf0671d21fd101f772ce143940bbb313aa7215e8ece6328cfe49607600b512` was neither acquired, reset, nor settled by this child.
+- Work unit: `unit-3a-catalog-import-evidence-correction`; one bounded attempt; RDD remains disabled.
+- Diagnosis: import now fails closed unless the approved plan has revision, audience, owner, and visible storage, and it leaves `LastVerification` unset because `VerifyOutcome` belongs to Unit 3b.
+- Harness disposition: reused; no process was started.
+- Cleanup evidence: no durable state was created; the catalog service remains in-memory only.
+
+#### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 3.1–3.2 correction | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 0; 3 existing top-level tests passed | same focused command — exit 1; import accepted all four empty plan provenance fields and stamped `LastVerification` | same command — exit 0; 4 empty-field subtests reject with no entries/provenance and successful import leaves verification empty | happy import plus empty revision, audience, owner, and visible storage paths | extracted `completeCatalogPlan`; `gofmt` and focused tests passed |
+
+#### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused test | `go test ./internal/app -run 'TestCatalogService' -count=1 -v` — exit 0; 4 top-level tests, including 4 required-provenance rejection subtests. |
+| Runtime harness | N/A — `CatalogService` remains a pure in-memory application service with no filesystem, SQLite, Git, or MCP boundary. |
+| Related regressions | `go test ./internal/app ./internal/domain ./internal/adapters/sqlite ./internal/adapters/mcp ./internal/adapters/git -count=1` — exit 0; 5 packages passed. |
+| Full/check-only | `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files. `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go` and `git diff --check` — exit 0/no output. |
+| Rollback boundary | Revert only the corrective hunks in `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, and this progress section; this restores the prior Unit 3a import behavior without touching Unit 3b persistence, MCP, or `VerifyOutcome`. |
+
+#### Delivery and Scope
+
+- Scope is limited to Catalog Import provenance validation and the deferred-verification boundary; assessments and existing treatment semantics are unchanged.
+- Tasks 3.1–3.2 remain correctly checked; no Unit 3b task is completed or modified.
+- Final child accounting against `7e2e0fb`: 268 additions + 6 deletions = 274 changed lines; no `size:exception` is claimed.
+- Correction actor churn is not reproducible: Unit 3a arrived as uncommitted parent work, so Git has no pre-correction tree. The final child remains below the 400-line limit.
+
+## Unit 3b Catalog Persistence & Verification (Strict TDD)
+
+### Result Contract
+
+- Outcome: passed. `VerifyOutcome` fail-closes against invalid authorization bindings and the MCP `verify_outcome` path records idempotent, internal lifecycle outcomes without writing visible documentation.
+- Parent-owned native attempt 44 token `sha256:663e087c18b7a88ce3a2ba05b8acdc6001dc887b3138d9cf511f0c7cdb472cc2` was neither acquired, reset, nor settled.
+- Work unit: `unit-3b-catalog-persistence-verification`; feature-branch-chain child base is `9c4f946`; no `size:exception`.
+
+### Strict-TDD Cycle Evidence
+
+| Task | Test file / layer | Safety net | RED | GREEN | Triangulate | Refactor |
+|---|---|---|---|---|---|---|
+| 3.3 | `internal/app/lifecycle_service_test.go` / unit | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite -count=1` — exit 0; 3 packages | `go test ./internal/app -run 'TestCatalogServiceVerifyOutcome' -count=1 -v` — exit 1; `VerifyOutcome` and request type undefined | same command — exit 0; 2 tests, 7 rejection subtests | inactive, out-of-plan, stale, revision, scope, baseline, and matching evidence | extracted `allowedAction`; gofmt and focused pass |
+| 3.4 | `internal/adapters/mcp/mcp_test.go` / integration | same 3-package baseline | `go test ./internal/adapters/mcp -run 'TestMCPVerifyOutcomePersistsIdempotently' -count=1 -v` — exit 1; input and handler undefined | same command — exit 0; one persistence/replay test | generic lifecycle idempotency plus direct MCP replay prove exactly one stored result | extracted provenance construction; focused pass |
+| 3.5 | `internal/adapters/mcp/mcp_test.go` / stdio integration | focused MCP tests green | N/A — verification/refactor task adds no production behavior | stdio authorize→edit→verify replay test exit 0 | real temporary Git repository plus repeated same-key call | `verificationProvenance`; reran focused MCP suite |
+
+### Work Unit Evidence
+
+| Evidence | Exact result |
+|---|---|
+| Focused tests | `go test ./internal/app -run 'TestCatalogService(VerifyOutcome|Imports|Assesses|Reports)' -count=1 -v` — exit 0; 6 top-level tests and 14 subtests passed. `go test ./internal/adapters/sqlite -run 'TestLifecycle(AtomicProvenanceAndIdempotency|ReplaysAvailableV2KeyExactlyOnce)' -count=1 -v` — exit 0; 2 tests passed. |
+| Runtime MCP harness | `go test ./internal/adapters/mcp -run 'TestMCP(StdioVerifiesEditedApprovedOutcomeIdempotently|VerifyOutcomePersistsIdempotently)' -count=1 -v` — exit 0; 2 tests passed. The stdio test creates a real Git repository, obtains an approved plan, edits `README.md`, verifies, then replays the same key with byte-identical output. |
+| Rollback boundary | Revert only Unit 3b hunks in `internal/app/lifecycle_service.go`, `internal/app/lifecycle_service_test.go`, `internal/adapters/mcp/mcp.go`, `internal/adapters/mcp/mcp_test.go`, tasks 3.3–3.5, and this cumulative progress section; preserves Unit 3a import's empty `LastVerification` truth. |
+
+### Delivery and Scope
+
+- Catalog import, audit/orphan pending-action, and verification result records are serialized through `PersistCatalog` and atomically retained by the existing lifecycle SQLite idempotency transaction; the in-memory service still never writes visible documentation.
+- No visible documentation content was authored. No process remains after stdio test cleanup; temporary repositories and SQLite workspaces are test-owned `t.TempDir()` resources.
+- Full suite: `go test ./...` — exit 0; 9 tested packages passed and `assets` had no test files.
+- Format/check: `gofmt -l internal/app/lifecycle_service.go internal/app/lifecycle_service_test.go internal/adapters/mcp/mcp.go internal/adapters/mcp/mcp_test.go` and `git diff --check` — exit 0; no output.
+- Exact child accounting against `9c4f946`: 368 additions + 12 deletions = 380 changed lines; within the 400-line ceiling.
+
+### Attempt 45 Continuation
+
+- Parent-owned token `sha256:3efefcf8af2d092797f6e6d72ed38bff1b17b03e0eff275475f4b51b00d1eb97` was neither acquired, reset, nor settled.
+- RED: `TestPersistCatalogRetainsImportAuditOrphanAndVerification` failed because `CatalogRecord` and `PersistCatalog` were undefined. GREEN: the same focused command exited 0, retaining three result types and exact same-key replays in SQLite.
+- REFACTOR: compact `CatalogStore` boundary reuses `Lifecycle.Save`; `go test ./...`, `gofmt -l`, and `git diff --check` exited 0.
+- Cleanup: no process remains; temporary repositories and SQLite workspaces are test-owned `t.TempDir()` resources.

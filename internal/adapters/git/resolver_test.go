@@ -101,13 +101,99 @@ func TestResolverRadiographSkipsIgnoredUntrackedDocumentation(t *testing.T) {
 	}
 }
 
+func TestResolverRadiographBuildsRichPathEvidence(t *testing.T) {
+	repo := newRepository(t)
+	for file, content := range map[string]string{
+		"README.md": "overview\n", "go.mod": "module example.test/radiography\n", "cmd/tool/main.go": "package main\n",
+		"internal/app/service.go": "package app\n", "internal/data/store.go": "package data\n", "internal/app/service_test.go": "package app\n",
+		"Dockerfile": "FROM scratch\n", "SECURITY.md": "policy\n", "docs/guide.md": "guide\n",
+		".github/CODEOWNERS": "* @team\n", "OWNERS": "team\n", "vendor/RISK.md": "excluded\n", "generated/Dockerfile": "excluded\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, file)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(repo, file), content)
+	}
+	write(t, filepath.Join(repo, "linked-stack.md"), "outside\n")
+	if err := os.Symlink("linked-stack.md", filepath.Join(repo, "package.json")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+
+	resolver := Resolver{GitPath: "git"}
+	first, err := resolver.Radiograph(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := resolver.Radiograph(context.Background(), repo)
+	if err != nil || first.Identity != second.Identity || !reflect.DeepEqual(first.Findings, second.Findings) || !reflect.DeepEqual(first.Context, second.Context) {
+		t.Fatalf("non-deterministic reports: %#v %#v, %v", first, second, err)
+	}
+	wantAreas := []string{"purpose", "stack", "modules", "architecture", "flows", "data", "execution", "tests", "deployment", "risks", "documentation"}
+	if len(first.Findings) != len(wantAreas) {
+		t.Fatalf("findings = %#v", first.Findings)
+	}
+	for i, finding := range first.Findings {
+		if finding.Area != wantAreas[i] || (len(finding.Candidates) == 0) == (finding.Absence == "") || finding.Uncertainty == "" {
+			t.Fatalf("finding[%d] = %#v", i, finding)
+		}
+		for _, candidate := range finding.Candidates {
+			if candidate.Value == "" || len(candidate.Evidence) == 0 {
+				t.Fatalf("candidate lacks evidence: %#v", candidate)
+			}
+			for _, evidence := range candidate.Evidence {
+				if evidence.Path == "" || evidence.Signal == "" || strings.Contains(evidence.Path, "vendor/") || strings.Contains(evidence.Path, "generated/") || evidence.Path == "package.json" {
+					t.Fatalf("unsafe affirmative evidence: %#v", evidence)
+				}
+			}
+		}
+	}
+	contextByArea := map[string]Finding{}
+	for _, finding := range first.Context {
+		contextByArea[finding.Area] = finding
+	}
+	for _, area := range []string{"visible_storage", "audience", "language", "ownership"} {
+		if _, ok := contextByArea[area]; !ok {
+			t.Fatalf("missing context %q: %#v", area, first.Context)
+		}
+	}
+	if len(contextByArea["visible_storage"].Candidates) < 2 || len(contextByArea["visible_storage"].Conflicts) != 1 || len(contextByArea["ownership"].Candidates) != 2 || len(contextByArea["ownership"].Conflicts) != 1 || !first.Ownership.Uncertain {
+		t.Fatalf("context selected or lost conflict: %#v", first.Context)
+	}
+	for _, area := range []string{"audience", "language"} {
+		if contextByArea[area].Absence == "" || contextByArea[area].Uncertainty == "" || len(contextByArea[area].Candidates) != 0 {
+			t.Fatalf("fabricated %s context: %#v", area, contextByArea[area])
+		}
+	}
+}
+
+func TestResolverRadiographMinimalRepositoryReportsAbsence(t *testing.T) {
+	report, err := (Resolver{GitPath: "git"}).Radiograph(context.Background(), newRepository(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Documentation) != 0 || len(report.Findings) != 11 || len(report.Context) != 4 {
+		t.Fatalf("minimal report = %#v", report)
+	}
+	for _, finding := range append(append([]Finding{}, report.Findings...), report.Context...) {
+		if len(finding.Candidates) != 0 || finding.Absence == "" || finding.Uncertainty == "" {
+			t.Fatalf("fabricated or implicit absence: %#v", finding)
+		}
+	}
+}
+
 func TestRadiographyIdentityBindsSemanticFields(t *testing.T) {
 	entries := map[string]inventoryEntry{"README.sh": {"100755", "script", true}, "guide.md": {"100644", "object", true}}
 	documentation := []DocumentationEvidence{{"guide.md", "sha256:digest", "uncertain", "maintenance_evidence_absent"}, {"other.md", "sha256:other", "maintained", "owner_signal"}}
 	exclusions := []Exclusion{{"README.sh", "non_documentation_path", "path_extension_or_known_non_documentation_name"}, {"vendor.md", "generated_or_vendor", "generated_or_vendor_directory"}}
 	ownership := OwnershipUncertainty{Uncertain: true, Reason: "ownership_not_inferred_from_repository_evidence"}
+	findings := []Finding{{Area: "purpose", Candidates: []Candidate{{Value: "README.md", Evidence: []RepositoryEvidence{{Path: "README.md", Signal: "root_readme"}}}}}, {Area: "stack", Absence: "insufficient_safe_path_evidence", Uncertainty: "not_confirmed"}}
+	contextFindings := []Finding{{Area: "ownership", Conflicts: []Conflict{{Values: []string{"CODEOWNERS", "OWNERS"}, Reason: "multiple_candidates", Evidence: []RepositoryEvidence{{Path: "CODEOWNERS", Signal: "ownership_path"}}}}, Uncertainty: "not_selected"}}
 	root, otherRoot := "/repo", "/other"
-	identity := func() string { return radiographyIdentity(root, ownership, entries, documentation, exclusions) }
+	identity := func() string {
+		return radiographyIdentity(root, ownership, entries, documentation, exclusions, findings, contextFindings)
+	}
 	swap := func(a, b *string) { *a, *b = *b, *a }
 	cases := []struct {
 		name   string
@@ -128,6 +214,13 @@ func TestRadiographyIdentityBindsSemanticFields(t *testing.T) {
 		{"tracked", func() { entries["guide.md"] = inventoryEntry{"100644", "object", false} }},
 		{"ownership boolean", func() { ownership.Uncertain = !ownership.Uncertain }},
 		{"ownership reason", func() { swap(&ownership.Reason, &otherRoot) }},
+		{"candidate value", func() { findings[0].Candidates[0].Value = "OTHER.md" }},
+		{"evidence path", func() { findings[0].Candidates[0].Evidence[0].Path = "OTHER.md" }},
+		{"evidence signal", func() { findings[0].Candidates[0].Evidence[0].Signal = "other_signal" }},
+		{"absence", func() { findings[1].Absence = "none" }},
+		{"conflict", func() { contextFindings[0].Conflicts[0].Reason = "other_conflict" }},
+		{"uncertainty", func() { contextFindings[0].Uncertainty = "other_uncertainty" }},
+		{"finding order", func() { findings[0], findings[1] = findings[1], findings[0] }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
