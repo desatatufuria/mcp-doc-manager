@@ -311,6 +311,10 @@ func (r Resolver) radiograph(ctx context.Context, git, repoRoot string) (Radiogr
 	}
 	files := make([]string, 0, len(entries))
 	for file := range entries {
+		if file == ".docmanager" || strings.HasPrefix(file, ".docmanager/") {
+			delete(entries, file)
+			continue
+		}
 		files = append(files, file)
 	}
 	sort.Strings(files)

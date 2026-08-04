@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +119,78 @@ func TestMCPDocumentChangeRequiresWorkspaceInitialization(t *testing.T) {
 	if err != nil || output.Report == nil {
 		t.Fatalf("after install = %#v, %v", output, err)
 	}
+}
+
+func TestMCPInstalledWorkspaceCanImportCatalogWithoutIgnoringOwnedState(t *testing.T) {
+	repo := mcpRepository(t)
+	writeMCP(t, filepath.Join(repo, "README.md"), "before\n")
+	mcpGit(t, repo, "add", "README.md")
+	mcpGit(t, repo, "commit", "-m", "initial")
+	if _, err := app.WorkspaceInstall(repo, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"guidance/AGENTS.md", "guidance/skills/docmanager/SKILL.md", "ledger.db"} {
+		if _, err := os.Lstat(filepath.Join(repo, ".docmanager", filepath.FromSlash(path))); err != nil {
+			t.Fatalf("installed owned state %q: %v", path, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(repo, ".gitignore")); !os.IsNotExist(err) {
+		t.Fatalf("fixture must not hide owned state: %v", err)
+	}
+
+	_, radiographed, err := radiograph(context.Background(), nil, radiographyInput{Repository: repo})
+	if err != nil || radiographed.Radiography == nil {
+		t.Fatalf("radiograph = %#v, %v", radiographed, err)
+	}
+	_, planned, err := proposePlan(context.Background(), nil, planningInput{
+		Repository: repo, VisibleStorage: ".", Audience: "contributors", Language: "en", Owner: "docs-team",
+		Confirmed: true, PlanApproved: true, BatchApproved: true, PolicyApproved: true, Policy: app.ApprovalRequired,
+		Actor: "local-user", Interaction: "mcp:plan", Request: "plan-request", IdempotencyKey: "plan-key",
+	})
+	if err != nil || planned.Planning == nil || planned.Planning.Err != nil {
+		t.Fatalf("plan = %#v, %v", planned, err)
+	}
+	documents := make([]catalogDocumentInput, len(planned.Planning.Radiography.Documentation))
+	for i, document := range planned.Planning.Radiography.Documentation {
+		documents[i] = catalogDocumentInput{Path: document.Path, Evidence: document.Evidence, Digest: document.Digest}
+	}
+	failed, imported, err := importCatalog(context.Background(), nil, catalogImportInput{
+		Repository: repo, Plan: planned.Planning.Plan, Policy: planned.Planning.Policy, Documents: documents,
+		Evidence: planned.Planning.Radiography.Identity, Actor: "local-user", Interaction: "mcp:import", Request: "import-request", IdempotencyKey: "import-key",
+	})
+	if err != nil || failed != nil || imported.Import == nil || len(imported.Import.Entries) != 1 {
+		t.Fatalf("evidence-complete import = %#v, %#v, %v; documentation = %#v", failed, imported, err, planned.Planning.Radiography.Documentation)
+	}
+	if got := planned.Planning.Radiography.Documentation; len(got) != 1 || got[0].Path != "README.md" || got[0].Digest == "" {
+		t.Fatalf("documentation = %#v", got)
+	}
+	for _, exclusion := range planned.Planning.Radiography.Exclusions {
+		if exclusion.Path == ".docmanager" || strings.HasPrefix(exclusion.Path, ".docmanager/") {
+			t.Fatalf("owned exclusion = %#v", exclusion)
+		}
+	}
+
+	identity := planned.Planning.Radiography.Identity
+	writeMCP(t, filepath.Join(repo, ".docmanager", "guidance", "AGENTS.md"), "changed owned guidance\n")
+	writeMCP(t, filepath.Join(repo, ".docmanager", "internal.md"), "changed owned state\n")
+	_, changed, err := radiograph(context.Background(), nil, radiographyInput{Repository: repo})
+	if err != nil || changed.Radiography == nil || changed.Radiography.Identity != identity {
+		t.Fatalf("owned state changed radiography identity: %#v, %v", changed.Radiography, err)
+	}
+
+	writeMCP(t, filepath.Join(repo, "notes.md"), "untracked\n")
+	_, ordinary, err := radiograph(context.Background(), nil, radiographyInput{Repository: repo})
+	if err != nil || ordinary.Radiography == nil || ordinary.Radiography.Identity == identity {
+		t.Fatalf("ordinary state did not change radiography: %#v, %v", ordinary.Radiography, err)
+	}
+	want := []gitadapter.DocumentationEvidence{
+		{Path: "README.md", Digest: planned.Planning.Radiography.Documentation[0].Digest, Classification: "uncertain", Evidence: "maintenance_evidence_absent"},
+		{Path: "notes.md", Classification: "uncertain", Evidence: "untracked_content_not_read"},
+	}
+	if !reflect.DeepEqual(ordinary.Radiography.Documentation, want) {
+		t.Fatalf("ordinary documentation = %#v, want %#v", ordinary.Radiography.Documentation, want)
+	}
+	assertMCPRows(t, repo, map[string]int{"catalog_entries": 1, "catalog_imports": 1})
 }
 
 func TestMCPStdioRadiographyToPlanWithoutVisibleWrites(t *testing.T) {
