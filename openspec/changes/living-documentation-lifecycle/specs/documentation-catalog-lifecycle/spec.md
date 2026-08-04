@@ -69,3 +69,31 @@ The calling agent MUST author visible-document changes through normal repository
 - GIVEN a caller reports an edit outside the approved plan or with changed evidence
 - WHEN verification runs
 - THEN the system rejects verification and records the mismatch without accepting the outcome
+
+### Requirement: Legacy Idempotency Migration Integrity
+
+The system MUST preserve all historical v1 provenance and idempotency data for audit. When v1 evidence cannot reliably reconstruct a provenance-to-idempotency relation, migration MUST mark the legacy key replay unavailable and MUST NOT invent a mapping. A request using that key MUST return a stable typed refusal and MUST NOT execute, replay an unrelated result, overwrite audit history, or create a duplicate successful action. New v2 records MUST retain exact idempotent replay. Migration failure MUST be atomic and leave v1 unchanged.
+
+#### Scenario: Invalidate an ambiguous multi-record legacy key
+
+- GIVEN one v1 idempotency key has insufficient evidence to relate it to multiple provenance records
+- WHEN the v1 data migrates to v2
+- THEN all historical records are preserved and that key is marked replay unavailable
+
+#### Scenario: Refuse a migrated legacy key
+
+- GIVEN a legacy key is marked replay unavailable after migration
+- WHEN a request reuses that key
+- THEN the system returns the stable typed refusal without executing or changing audit history
+
+#### Scenario: Replay a new v2 request exactly
+
+- GIVEN a successful v2 request and its idempotency key
+- WHEN an identical request reuses that key
+- THEN the system replays its exact recorded result without a duplicate action
+
+#### Scenario: Roll back a failed legacy migration
+
+- GIVEN v1 lifecycle records and a migration failure
+- WHEN the migration transaction ends
+- THEN v1 records remain unchanged and no partial v2 state exists

@@ -2,68 +2,71 @@
 
 ## Technical Approach
 
-DocManager becomes a staged MCP lifecycle authority, never a visible-document writer. It returns evidence-backed proposals, persists approved state in `.docmanager/lifecycle.db`, authorizes bounded caller work, then verifies/audits reported Git edits. It retains the domain/app/adapter split, Git resolver, SQLite, receipts, ownership checks, and stdio.
+DocManager is a staged MCP lifecycle authority, not a visible-document writer: evidence-backed plans, approved state in `.docmanager/lifecycle.db`, bounded caller edits, then verification/audit. It retains domain/app/adapter boundaries, Git resolution, SQLite, and stdio.
 
 ## Architecture Decisions
 
 | Decision | Choice | Alternative / tradeoff | Rationale |
 |---|---|---|---|
-| State | Separate versioned `lifecycle.db` | Extend receipts | Independent migrations; receipts stay evidence. |
+| State | Separate versioned `lifecycle.db` | Extend receipts | Independent migration; receipts remain evidence. |
 | Author | MCP returns control data; caller writes | Tool writes docs | Preserves review and attribution. |
-| Automation | Automatic only for plan-matching content create/update; approval-required per batch | Per-file approval | Feature context; structural/destructive always approved. |
-| Discovery | Evidence-scored Markdown/MDX; import in place | Fixed README/docs | Confirmation chooses path, language, audience, owner. |
-| Authority | Explicit local user in the active interaction | Git identity or cryptographic authentication | MVP records a declared actor and interaction/context provenance without claiming either stronger authority source. |
+| Automation | Plan-matching content create/update only; structural/destructive approval | Per-file approval | Bounded automation with feature context. |
+| Discovery | Evidence-scored Markdown/MDX, imported in place | Fixed locations | Confirmation chooses path, language, audience, owner. |
+| Authority | Declared local interaction actor | Git/cryptographic authority | Records provenance without claiming stronger authority. |
+| Legacy replay | Preserve v1 rows, explicitly refuse unverifiable keys | Guess a record link or delete keys | Audit survives without an invented provenance↔key relationship. |
 
 ## Domain Model and State Machines
 
-`Radiography{Draft,Confirmed,Rejected} -> Plan{Proposed,Approved,Refused,Drifted} -> Batch{Proposed,Authorized,Reported,Verified,Rejected}`. `Authorization{Active,Invalidated}` becomes invalid when its batch completes or its approved plan, policy, scope, baseline, or relevant evidence changes. Policy `{ApprovalRequired,AutomaticAfterApprovedPlan}` changes `{Proposed,Approved,Rejected}` with old/new audit. `CatalogEntry` has required path, purpose, audience, owner/candidates, related areas, state `{Imported,Active,Stale,Uncertain,Orphan,Archived}`, evidence, verification, pending action. `Audit{Running,Reported}` returns `{Update,Review,Orphan,Conflict,NoAction}`. `PendingAction{Open,Approved,Refused,Completed,Cancelled}`; structural actions never auto-approve. `Verification{Pending,Verified,Mismatch,Stale}`. All transitions append provenance.
+`Radiography{Draft,Confirmed,Rejected} -> Plan{Proposed,Approved,Refused,Drifted} -> Batch{Proposed,Authorized,Reported,Verified,Rejected}`. Authorization invalidates on completion or plan/policy/scope/baseline/evidence change. Catalog states are `{Imported,Active,Stale,Uncertain,Orphan,Archived}`; audits return `{Update,Review,Orphan,Conflict,NoAction}`; transitions append provenance.
 
 ## Data Flow
 
 ```text
-agent -> radiograph -> Git/discovery evidence -> proposed plan -> approval -> lifecycle.db
-agent <- authorization <-------------------------------- approved batch/policy
-agent --normal Git edits + reported paths--> verify/audit -> provenance -> lifecycle.db
+agent -> radiograph -> Git evidence -> proposed plan -> approval -> lifecycle.db
+agent <- authorization <----------------------------- approved batch/policy
+agent --Git edits + report--> verify/audit -> provenance/idempotency -> lifecycle.db
 ```
 
-`radiograph` returns findings, confidence, exclusions, ownership conflicts, context candidates; `propose_plan` returns an unpersisted plan. `approve_plan`, `approve_batch`, `change_policy` record approvals. `authorize_batch` returns allowed paths/actions and baseline; `audit` returns candidates/rationale; `verify_outcome` records verified/mismatch. Tools never return content or write/move/delete visible files. Identical idempotency keys replay; divergent reuse fails.
+`radiograph` returns evidence/confidence/exclusions; `propose_plan` is unpersisted. Tools never write visible files. Available keys replay; divergent keys conflict.
 
 ## Persistence, Evidence, and Recovery
 
-`internal/adapters/sqlite/lifecycle.go` requires a real non-symlink owned workspace, applies forward-only `schema_migrations`, and uses `BEGIN IMMEDIATE` for atomic state plus provenance. Tables: `radiographies`, `plans`, `batches`, `catalog_entries`, `audits`, `pending_actions`, `verifications`, `policy_history`, `provenance`, `idempotency`. Failed migrations roll back; provenance stores declared local actor, interaction/context, request/key, time, approval, evidence, input/result, versions. It does not claim cryptographic authentication or Git-derived authority.
+`internal/adapters/sqlite/lifecycle.go` requires a real non-symlink private workspace and uses `BEGIN IMMEDIATE`. V2 `provenance` preserves v1 `record_id`, actor, interaction, and context, adding explicit legacy values for v2-only fields. V2 `idempotency` persists `key`, original `input`/`result`, canonical `identity`, nullable `record_id`, and `replay_state TEXT NOT NULL CHECK (replay_state IN ('available','legacy_unavailable'))`.
 
-Approved plans import discovered docs in place. `Resolver` supplies validated roots, explicit scopes, identities, and digests; on-demand audit obtains current evidence. Confidence is coverage, never truthfulness. Excluded generated/vendor/executable material has a reason; uncertainty persists. Baseline change causes stale evidence/plan drift and re-plan. Ownership conflict blocks authorization; mismatched writes are `Mismatch`; orphans remain pending. DB failure rolls back; visible rollback is Git revert and state rollback is an auditable compensating transition.
+New entries write `available`, a non-null link, and length-prefixed identity; `Save` replays their exact result. V1 lacks reliable key-to-record evidence: copy every row, retain key/input/result/audit values, set `record_id=NULL` and `legacy_unavailable`; never assign keys to the first provenance row. `Save` checks state before execution/mutation and returns `domain.ErrLegacyIdempotencyReplayUnavailable`; repeated refusal changes nothing.
+
+V1→V2 is one transaction: `BEGIN IMMEDIATE`, rename/create/copy/validate/rename/drop, insert version 2, commit. Failure restores untouched v1 schema/data/version. Fresh DBs create final v2 tables directly. Provenance records actor, interaction/context, request/key, time, approval, evidence, input/result, versions; no cryptographic or Git authority claim.
+
+Plans import discovered docs in place. The resolver validates roots/scopes/identities/digests; confidence is coverage, not truth. Exclusions have reasons, drift requires re-plan, conflicts block authorization, and orphans remain pending. DB rollback is atomic; visible rollback is an auditable Git revert.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
-| `internal/domain/lifecycle.go` | Create | Typed states, requests/results, transition validation. |
-| `internal/app/lifecycle_service.go` | Create | Radiography, planning, authorization, audit, verification use cases. |
-| `internal/adapters/sqlite/lifecycle.go` | Create | Owned database, migrations, transactions. |
-| `internal/adapters/git/resolver.go` | Modify | Discovery/audit evidence using safe root/scope validation. |
-| `internal/adapters/mcp/mcp.go` | Modify | Staged lifecycle tools and typed errors. |
-| `internal/{domain,app,adapters}/*_test.go` | Modify/Create | RED domain, SQLite, Git, stdio contracts. |
+| `internal/domain/lifecycle.go` | Modify | Add stable legacy-replay refusal error/state contract. |
+| `internal/adapters/sqlite/lifecycle.go` | Modify | Final v2 schema, faithful legacy copy, atomic migration, replay-state gate. |
+| `internal/adapters/sqlite/lifecycle_test.go` | Modify | Historical-fixture migration/replay/rollback characterization and proof coverage. |
 
-Do not modify `opencode-daily-docmanager-guidance`, OpenCode configuration/guidance, or visible documentation. Reuse their ownership/drift and stdio patterns only; receipts do not define freshness or authorization.
+Do not modify `opencode-daily-docmanager-guidance`, OpenCode configuration/guidance, or visible documentation; reuse only their ownership/drift and stdio patterns.
 
 ## Interfaces / Contracts
 
 ```go
-type Authorization struct { BatchID, PlanRevision, PolicyRevision string; Scope Scope; Baseline, Evidence string; Allowed []PlannedAction }
-type PlannedAction struct { Path string; Kind ActionKind; Structural bool }
-type VerifyOutcomeRequest struct { BatchID, IdempotencyKey string; Writes []ReportedWrite; Evidence string }
+var ErrLegacyIdempotencyReplayUnavailable = errors.New("legacy_idempotency_replay_unavailable")
+type IdempotencyReplayState string
+const ( IdempotencyAvailable IdempotencyReplayState = "available"; IdempotencyLegacyUnavailable IdempotencyReplayState = "legacy_unavailable" )
 ```
 
-`Authorization` is evidence-bound, not wall-clock-bound: it carries approved plan/policy revisions, scope, baseline, and relevant evidence identity. `VerifyOutcome` rejects inactive/completed authorization, out-of-bound writes, unapproved structural actions, stale evidence, and revision/scope/baseline drift. A current `Receipt` may be attached as evidence only.
+`Authorization` remains evidence-bound (plan/policy revisions, scope, baseline, evidence, actions). `VerifyOutcome` rejects inactive/completed, out-of-bound/unapproved structural writes, stale evidence, and drift.
 
 ## Testing Strategy
 
 | Layer | Test | Approach |
 |---|---|---|
-| Unit | states, confidence/exclusions, authorization/mismatch | Table-driven RED `t.Run`. |
-| Adapter | migrations, ownership/symlinks, idempotency, Git evidence | `t.TempDir()` SQLite/Git fixtures. |
-| MCP | staged stdio flow and no visible writes | Existing harness; external Git skips under `testing.Short()`. |
+| Unit | state/error contract | Table-driven `t.Run` success/failure cases. |
+| SQLite adapter | Exact multi-record v1 fixture: all provenance/idempotency values retained; every ambiguous key unavailable; refusal causes no mutation; new v2 exact replay | `t.TempDir()` fixture and direct row assertions. |
+| SQLite adapter | Forced transformation failure restores exact v1 rows, schemas, and version; fresh DB is final v2 | Failure trigger plus schema/value comparison. |
+| MCP | Staged flow/no visible writes | Existing harness; external Git skips under `testing.Short()`. |
 
 ## Threat Matrix
 
@@ -75,9 +78,13 @@ type VerifyOutcomeRequest struct { BatchID, IdempotencyKey string; Writes []Repo
 | Push state | N/A: no push operation. | — | — |
 | PR commands | N/A: no PR operation. | — | — |
 
+## Portable Local Root Threat Model
+
+Resolver and Radiograph reject lexical aliases and root symlinks. They bind an `Lstat` directory identity and revalidate it before and after every Git command with no-symlink semantics plus `SameFile`; this fails closed for static or sustained root replacement, including replacement by a symlink to the original inode. This portable local-tool contract does not claim descriptor or inode pinning: an adversarial swap-and-restore wholly during one Git command is explicitly outside the threat model. The used read-only plumbing does not invoke Git hooks; `core.hooksPath`, credential helpers, fsmonitor, diff/textconv, attributes, global/system/injected configuration, optional locks, lazy fetch, replacement objects, prompts, pager, maintenance, and GC are neutralized where applicable. Raw `cat-file blob` and `hash-object --no-filters` do not run repository filters.
+
 ## Migration / Rollout
 
-MVP work units: (1) domain + migrations/tests (~300 lines), (2) radiography/plan MCP (~350), (3) catalog audit/verification (~400). With `ask-on-risk`, require a delivery decision before combining units; every unit is below 800 lines. State is additive; disable lifecycle tools to roll back while retaining records. No visible-doc migration is required.
+Delivery is tracker → PR #4 → PR 1c → PR 1d → Unit 2; only the tracker integrates to `develop`. PR 1c is currently 388 changed lines and remains ≤400 with no size exception; PR 1d is separately budgeted ≤400 with no exception and remains required before Unit 2. State is additive; lifecycle tools can be disabled while records remain. No visible-document migration is required.
 
 ## Open Questions
 
