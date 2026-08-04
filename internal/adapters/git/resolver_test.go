@@ -1,8 +1,11 @@
 package git
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,13 +101,99 @@ func TestResolverRadiographSkipsIgnoredUntrackedDocumentation(t *testing.T) {
 	}
 }
 
+func TestResolverRadiographBuildsRichPathEvidence(t *testing.T) {
+	repo := newRepository(t)
+	for file, content := range map[string]string{
+		"README.md": "overview\n", "go.mod": "module example.test/radiography\n", "cmd/tool/main.go": "package main\n",
+		"internal/app/service.go": "package app\n", "internal/data/store.go": "package data\n", "internal/app/service_test.go": "package app\n",
+		"Dockerfile": "FROM scratch\n", "SECURITY.md": "policy\n", "docs/guide.md": "guide\n",
+		".github/CODEOWNERS": "* @team\n", "OWNERS": "team\n", "vendor/RISK.md": "excluded\n", "generated/Dockerfile": "excluded\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, file)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(repo, file), content)
+	}
+	write(t, filepath.Join(repo, "linked-stack.md"), "outside\n")
+	if err := os.Symlink("linked-stack.md", filepath.Join(repo, "package.json")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+
+	resolver := Resolver{GitPath: "git"}
+	first, err := resolver.Radiograph(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := resolver.Radiograph(context.Background(), repo)
+	if err != nil || first.Identity != second.Identity || !reflect.DeepEqual(first.Findings, second.Findings) || !reflect.DeepEqual(first.Context, second.Context) {
+		t.Fatalf("non-deterministic reports: %#v %#v, %v", first, second, err)
+	}
+	wantAreas := []string{"purpose", "stack", "modules", "architecture", "flows", "data", "execution", "tests", "deployment", "risks", "documentation"}
+	if len(first.Findings) != len(wantAreas) {
+		t.Fatalf("findings = %#v", first.Findings)
+	}
+	for i, finding := range first.Findings {
+		if finding.Area != wantAreas[i] || (len(finding.Candidates) == 0) == (finding.Absence == "") || finding.Uncertainty == "" {
+			t.Fatalf("finding[%d] = %#v", i, finding)
+		}
+		for _, candidate := range finding.Candidates {
+			if candidate.Value == "" || len(candidate.Evidence) == 0 {
+				t.Fatalf("candidate lacks evidence: %#v", candidate)
+			}
+			for _, evidence := range candidate.Evidence {
+				if evidence.Path == "" || evidence.Signal == "" || strings.Contains(evidence.Path, "vendor/") || strings.Contains(evidence.Path, "generated/") || evidence.Path == "package.json" {
+					t.Fatalf("unsafe affirmative evidence: %#v", evidence)
+				}
+			}
+		}
+	}
+	contextByArea := map[string]Finding{}
+	for _, finding := range first.Context {
+		contextByArea[finding.Area] = finding
+	}
+	for _, area := range []string{"visible_storage", "audience", "language", "ownership"} {
+		if _, ok := contextByArea[area]; !ok {
+			t.Fatalf("missing context %q: %#v", area, first.Context)
+		}
+	}
+	if len(contextByArea["visible_storage"].Candidates) < 2 || len(contextByArea["visible_storage"].Conflicts) != 1 || len(contextByArea["ownership"].Candidates) != 2 || len(contextByArea["ownership"].Conflicts) != 1 || !first.Ownership.Uncertain {
+		t.Fatalf("context selected or lost conflict: %#v", first.Context)
+	}
+	for _, area := range []string{"audience", "language"} {
+		if contextByArea[area].Absence == "" || contextByArea[area].Uncertainty == "" || len(contextByArea[area].Candidates) != 0 {
+			t.Fatalf("fabricated %s context: %#v", area, contextByArea[area])
+		}
+	}
+}
+
+func TestResolverRadiographMinimalRepositoryReportsAbsence(t *testing.T) {
+	report, err := (Resolver{GitPath: "git"}).Radiograph(context.Background(), newRepository(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Documentation) != 0 || len(report.Findings) != 11 || len(report.Context) != 4 {
+		t.Fatalf("minimal report = %#v", report)
+	}
+	for _, finding := range append(append([]Finding{}, report.Findings...), report.Context...) {
+		if len(finding.Candidates) != 0 || finding.Absence == "" || finding.Uncertainty == "" {
+			t.Fatalf("fabricated or implicit absence: %#v", finding)
+		}
+	}
+}
+
 func TestRadiographyIdentityBindsSemanticFields(t *testing.T) {
 	entries := map[string]inventoryEntry{"README.sh": {"100755", "script", true}, "guide.md": {"100644", "object", true}}
 	documentation := []DocumentationEvidence{{"guide.md", "sha256:digest", "uncertain", "maintenance_evidence_absent"}, {"other.md", "sha256:other", "maintained", "owner_signal"}}
 	exclusions := []Exclusion{{"README.sh", "non_documentation_path", "path_extension_or_known_non_documentation_name"}, {"vendor.md", "generated_or_vendor", "generated_or_vendor_directory"}}
 	ownership := OwnershipUncertainty{Uncertain: true, Reason: "ownership_not_inferred_from_repository_evidence"}
+	findings := []Finding{{Area: "purpose", Candidates: []Candidate{{Value: "README.md", Evidence: []RepositoryEvidence{{Path: "README.md", Signal: "root_readme"}}}}}, {Area: "stack", Absence: "insufficient_safe_path_evidence", Uncertainty: "not_confirmed"}}
+	contextFindings := []Finding{{Area: "ownership", Conflicts: []Conflict{{Values: []string{"CODEOWNERS", "OWNERS"}, Reason: "multiple_candidates", Evidence: []RepositoryEvidence{{Path: "CODEOWNERS", Signal: "ownership_path"}}}}, Uncertainty: "not_selected"}}
 	root, otherRoot := "/repo", "/other"
-	identity := func() string { return radiographyIdentity(root, ownership, entries, documentation, exclusions) }
+	identity := func() string {
+		return radiographyIdentity(root, ownership, entries, documentation, exclusions, findings, contextFindings)
+	}
 	swap := func(a, b *string) { *a, *b = *b, *a }
 	cases := []struct {
 		name   string
@@ -125,6 +214,13 @@ func TestRadiographyIdentityBindsSemanticFields(t *testing.T) {
 		{"tracked", func() { entries["guide.md"] = inventoryEntry{"100644", "object", false} }},
 		{"ownership boolean", func() { ownership.Uncertain = !ownership.Uncertain }},
 		{"ownership reason", func() { swap(&ownership.Reason, &otherRoot) }},
+		{"candidate value", func() { findings[0].Candidates[0].Value = "OTHER.md" }},
+		{"evidence path", func() { findings[0].Candidates[0].Evidence[0].Path = "OTHER.md" }},
+		{"evidence signal", func() { findings[0].Candidates[0].Evidence[0].Signal = "other_signal" }},
+		{"absence", func() { findings[1].Absence = "none" }},
+		{"conflict", func() { contextFindings[0].Conflicts[0].Reason = "other_conflict" }},
+		{"uncertainty", func() { contextFindings[0].Uncertainty = "other_uncertainty" }},
+		{"finding order", func() { findings[0], findings[1] = findings[1], findings[0] }},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -434,6 +530,354 @@ func TestResolverRadiographPathsRejectMissingResolvedPaths(t *testing.T) {
 	if _, err := (Resolver{GitPath: proxy}).radiographPaths(context.Background(), proxy, t.TempDir()); !errors.Is(err, domain.ErrContentRead) {
 		t.Fatalf("error = %v, want ErrContentRead", err)
 	}
+}
+
+func TestRadiographSnapshotOraclePreservesOrdinaryAndLinkedWorktrees(t *testing.T) {
+	space := filepath.Join(t.TempDir(), "snapshot worktrees")
+	if err := os.MkdirAll(space, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := newRepositoryAt(t, filepath.Join(space, "ordinary"))
+	if err := os.MkdirAll(filepath.Join(ordinary, ".docmanager"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(ordinary, "README.md"), "fixture\n")
+	write(t, filepath.Join(ordinary, ".docmanager", "state"), "catalog\n")
+	runGit(t, ordinary, "add", ".")
+	runGit(t, ordinary, "commit", "-m", "fixture")
+	linked := filepath.Join(space, "linked")
+	runGit(t, ordinary, "worktree", "add", "-b", "linked", linked)
+	primary := filepath.Join(ordinary, ".git", "objects")
+	alternate := filepath.Join(space, "alternate objects")
+	if err := os.MkdirAll(alternate, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(primary, alternate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(primary, "info", "alternates"), relative+"\n")
+	write(t, filepath.Join(alternate, "sentinel"), "alternate\n")
+
+	resolver := Resolver{GitPath: "git"}
+	for _, root := range []string{ordinary, linked} {
+		t.Run(filepath.Base(root), func(t *testing.T) {
+			paths, err := resolver.radiographPaths(context.Background(), "git", root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := snapshotRadiograph(root, paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := resolver.Radiograph(context.Background(), root); err != nil {
+				t.Fatal(err)
+			}
+			after, err := snapshotRadiograph(root, paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if before != after {
+				t.Fatalf("Radiograph changed repository state: before %s after %s", before, after)
+			}
+		})
+	}
+}
+
+func TestRadiographSnapshotOracleBindsEveryFieldAndFailsClosed(t *testing.T) {
+	repo := newRepository(t)
+	if err := os.MkdirAll(filepath.Join(repo, ".docmanager"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, "README.md"), "fixture\n")
+	write(t, filepath.Join(repo, ".docmanager", "state"), "catalog\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "fixture")
+	alternate := filepath.Join(t.TempDir(), "alternate")
+	if err := os.MkdirAll(alternate, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	primary := filepath.Join(repo, ".git", "objects")
+	relative, err := filepath.Rel(primary, alternate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(primary, "info", "alternates"), relative+"\n")
+	paths, err := (Resolver{GitPath: "git"}).radiographPaths(context.Background(), "git", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := snapshotRadiograph(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		path string
+	}{
+		{"worktree bytes", filepath.Join(repo, "README.md")},
+		{"worktree mode", filepath.Join(repo, "README.md")},
+		{"git dir", filepath.Join(paths.gitDir, "oracle")},
+		{"common dir", filepath.Join(paths.commonDir, "oracle")},
+		{"index", paths.index},
+		{"config", paths.config},
+		{"hooks", filepath.Join(paths.hooks, "oracle")},
+		{"primary objects", filepath.Join(paths.primaryObjects, "oracle")},
+		{"alternate objects", filepath.Join(paths.alternateObjects[0], "oracle")},
+		{"docmanager", filepath.Join(repo, ".docmanager", "state")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.name == "worktree mode" {
+				if err := os.Chmod(test.path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				write(t, test.path, test.name)
+			}
+			changed, err := snapshotRadiograph(repo, paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if changed == baseline {
+				t.Fatal("snapshot did not bind changed field")
+			}
+		})
+	}
+	for _, test := range []struct {
+		name string
+		make func() error
+	}{
+		{"symlink", func() error { return os.Symlink("README.md", filepath.Join(repo, "linked.md")) }},
+		{"special file", func() error { return exec.Command("mkfifo", filepath.Join(repo, "pipe")).Run() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.make(); err != nil {
+				t.Skipf("cannot create unsafe fixture: %v", err)
+			}
+			if _, err := snapshotRadiograph(repo, paths); err == nil {
+				t.Fatal("snapshot accepted unsafe filesystem entry")
+			}
+		})
+	}
+	missing := paths
+	missing.config = filepath.Join(t.TempDir(), "missing-config")
+	if _, err := snapshotRadiograph(repo, missing); err == nil {
+		t.Fatal("snapshot accepted an unreadable bound path")
+	}
+}
+
+func TestResolverScopeSnapshotsPreserveStageAndScopeScenarios(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*testing.T) (string, domain.Scope)
+		check func(*testing.T, domain.Evidence, error)
+	}{
+		{
+			name: "unmerged staged identity and output",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "base\n")
+				runGit(t, repo, "add", "README.md")
+				runGit(t, repo, "commit", "-m", "base")
+				base := strings.TrimSpace(gitOutput(t, repo, "branch", "--show-current"))
+				runGit(t, repo, "checkout", "-b", "topic")
+				write(t, filepath.Join(repo, "README.md"), "topic\n")
+				runGit(t, repo, "commit", "-am", "topic")
+				runGit(t, repo, "checkout", base)
+				write(t, filepath.Join(repo, "README.md"), "main\n")
+				runGit(t, repo, "commit", "-am", "main")
+				if err := runGitError(repo, "merge", "topic"); err == nil {
+					t.Fatal("merge conflict setup unexpectedly succeeded")
+				}
+				return repo, domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) || evidence.DocumentationDigests["README.md"] != "missing" {
+					t.Fatalf("unmerged staged evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "staged",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := scopeRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "staged\n")
+				runGit(t, repo, "add", "README.md")
+				return repo, domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) {
+					t.Fatalf("staged evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "unborn",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "unborn\n")
+				runGit(t, repo, "add", "README.md")
+				return repo, domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if !errors.Is(err, domain.ErrContentRead) || evidence.Identity != "" || len(evidence.ChangedPaths) != 0 || len(evidence.DocumentationDigests) != 0 {
+					t.Fatalf("unborn staged result = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "initial",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "initial\n")
+				runGit(t, repo, "add", "README.md")
+				runGit(t, repo, "commit", "-m", "initial")
+				return repo, domain.Scope{Kind: domain.ScopeInitial, Range: "HEAD"}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) {
+					t.Fatalf("initial evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "empty index",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				return scopeRepository(t), domain.Scope{Kind: domain.ScopeStaged}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if !errors.Is(err, domain.ErrEmptyScope) || evidence.Identity != "" || len(evidence.ChangedPaths) != 0 || len(evidence.DocumentationDigests) != 0 {
+					t.Fatalf("empty index result = %#v, %v", evidence, err)
+				}
+			},
+		},
+		{
+			name: "commit a",
+			setup: func(t *testing.T) (string, domain.Scope) {
+				repo := newRepository(t)
+				write(t, filepath.Join(repo, "README.md"), "before\n")
+				runGit(t, repo, "add", "README.md")
+				runGit(t, repo, "commit", "-m", "before")
+				write(t, filepath.Join(repo, "README.md"), "after\n")
+				runGit(t, repo, "commit", "-am", "after")
+				return repo, domain.Scope{Kind: domain.ScopeInitial, Range: "HEAD"}
+			},
+			check: func(t *testing.T, evidence domain.Evidence, err error) {
+				t.Helper()
+				if err != nil || evidence.Identity == "" || !reflect.DeepEqual(evidence.ChangedPaths, []string{"README.md"}) {
+					t.Fatalf("commit -a initial evidence = %#v, %v", evidence, err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, scope := test.setup(t)
+			assertScopePreservesSnapshot(t, repo, scope, test.check)
+		})
+	}
+}
+
+func assertScopePreservesSnapshot(t *testing.T, repo string, scope domain.Scope, check func(*testing.T, domain.Evidence, error)) {
+	t.Helper()
+	resolver := Resolver{GitPath: "git"}
+	paths, err := resolver.radiographPaths(context.Background(), "git", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := snapshotRadiograph(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, resolveErr := resolver.Resolve(context.Background(), repo, scope)
+	after, err := snapshotRadiograph(repo, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatalf("Resolve(%#v) changed repository state: before %s after %s", scope, before, after)
+	}
+	check(t, evidence, resolveErr)
+}
+
+func snapshotRadiograph(root string, paths radiographPathSet) (string, error) {
+	var canonical bytes.Buffer
+	writeField := func(values ...string) {
+		for _, value := range values {
+			canonical.WriteString(value)
+			canonical.WriteByte(0)
+		}
+	}
+	var snapshotTree func(string, string, bool) error
+	snapshotTree = func(label, base string, skipGitDir bool) error {
+		var walk func(string) error
+		walk = func(current string) error {
+			relative, err := filepath.Rel(base, current)
+			if err != nil {
+				return err
+			}
+			if skipGitDir && relative == ".git" {
+				return nil
+			}
+			info, err := os.Lstat(current)
+			if err != nil {
+				return err
+			}
+			if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+				return fmt.Errorf("unsafe snapshot entry %q", current)
+			}
+			writeField(label, relative, fmt.Sprintf("%o", info.Mode()))
+			if info.IsDir() {
+				entries, err := os.ReadDir(current)
+				if err != nil {
+					return err
+				}
+				for _, entry := range entries {
+					if err := walk(filepath.Join(current, entry.Name())); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			content, err := os.ReadFile(current)
+			if err != nil {
+				return err
+			}
+			sum := sha256.Sum256(content)
+			writeField(fmt.Sprintf("%x", sum))
+			return nil
+		}
+		return walk(base)
+	}
+	if err := snapshotTree("worktree", root, true); err != nil {
+		return "", err
+	}
+	for _, field := range []struct {
+		label string
+		path  string
+	}{
+		{"git-dir", paths.gitDir},
+		{"common-dir", paths.commonDir},
+		{"index", paths.index},
+		{"config", paths.config},
+		{"hooks", paths.hooks},
+		{"primary-objects", paths.primaryObjects},
+	} {
+		if err := snapshotTree(field.label, field.path, false); err != nil {
+			return "", err
+		}
+	}
+	for _, alternate := range paths.alternateObjects {
+		if err := snapshotTree("alternate-objects", alternate, false); err != nil {
+			return "", err
+		}
+	}
+	sum := sha256.Sum256(canonical.Bytes())
+	return fmt.Sprintf("sha256:%x", sum), nil
 }
 
 func TestResolverRejectsRootReplacementBeforeEvidence(t *testing.T) {

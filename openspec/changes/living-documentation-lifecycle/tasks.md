@@ -28,9 +28,10 @@ No `size:exception`: every child is capped at 400 additions+deletions.
 | 2a2.2 | Stage/scope safety | base=completed 2a2.1c oracle branch | `go test ./internal/adapters/git -run 'Test.*(Unmerged|Staged|Unborn|EmptyIndex|CommitA)'` | unmerged/staged/unborn/initial/empty-index/`commit -a` oracle | stage identity/output hunks |
 | 2b | Planning service | base=2a2.2 branch | `go test ./internal/app` | radiography→bounded plan | service/tests only |
 | 2c | MCP staging | base=2b branch | `go test ./internal/adapters/mcp` | stdio radiography→plan | MCP adapter/tests only |
-| 3 | Catalog | base=2c branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
+| 3a | Catalog import and evidence | base=2c branch | `go test ./internal/app -run 'TestCatalogService'` | in-memory catalog service | catalog import/evidence only |
+| 3b | Catalog persistence and verification | base=3a branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
 
-Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→2a2.1c oracle→2a2.2→2b→2c→3; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
+Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→2a2.1c oracle→2a2.2→2b→2c→3a→3b; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
 
 ## Unit 1
 
@@ -80,38 +81,41 @@ Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→
 
 ## Unit 2a2.1c: Complete No-write Snapshot Oracle (base=completed 2a2.1b paths)
 
-- [ ] 2.10 RED: `resolver_test.go` defines complete ordinary/linked before/after no-write snapshots for worktree, index, config, hooks, primary/alternate objects, and `.docmanager`.
-- [ ] 2.11 GREEN: implement test-only complete snapshot identity and fail-closed special-file/symlink-target/read errors; prove sensitivity for every bound field.
-- [ ] 2.12 Evidence: record ordinary/linked no-write receipts, exact accounting, and snapshot-only rollback.
+- [x] 2.10 RED: `resolver_test.go` defines complete ordinary/linked before/after no-write snapshots for worktree, index, config, hooks, primary/alternate objects, and `.docmanager`.
+- [x] 2.11 GREEN: implement test-only complete snapshot identity and fail-closed special-file/symlink-target/read errors; prove sensitivity for every bound field.
+- [x] 2.12 Evidence: record ordinary/linked no-write receipts, exact accounting, and snapshot-only rollback.
 
 ## Unit 2a2.2: Stage & Scope Safety (base=completed 2a2.1c oracle)
 
-- [ ] 2.13 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
-- [ ] 2.14 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
-- [ ] 2.15 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
+- [x] 2.13 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
+- [x] 2.14 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
+- [x] 2.15 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
 
 ## Unit 2b: Planning Service (base=completed 2a2.2)
 
-- [ ] 2.16 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
-- [ ] 2.17 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
+- [x] 2.16 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
+- [x] 2.17 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
 
 ## Unit 2c: MCP Staging (base=completed 2b)
 
-- [ ] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
+- [x] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
 
-## Unit 3: Catalog (base=completed 2c)
+## Unit 3a: Catalog Import & Evidence (base=completed 2c)
 
-- [ ] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
-- [ ] 3.2 RED: evidenced update/review/orphan/conflict/no-action, never truthfulness.
-- [ ] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
-- [ ] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
-- [ ] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
+- [x] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
+- [x] 3.2 RED: evidenced update/review/orphan/conflict/no-action, never truthfulness.
+
+## Unit 3b: Catalog Persistence & Verification (base=completed 3a)
+
+- [x] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
+- [x] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
+- [x] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
 
 ## Unit 2 Mapping
 
 | Old | New |
 |---|---|
-| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b paths / 2.7–2.9 (checked) + 2a2.1c oracle / 2.10–2.12 (unchecked) |
+| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b paths / 2.7–2.9 (checked) + 2a2.1c oracle / 2.10–2.12 (checked) |
 | 2a2.2 / 2.7–2.9 | 2a2.2 / 2.13–2.15 |
 | 2b / 2.10–2.11 | 2b / 2.16–2.17 |
 | 2c / 2.12 | 2c / 2.18 |
