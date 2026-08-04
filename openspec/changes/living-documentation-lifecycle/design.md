@@ -78,6 +78,10 @@ const ( IdempotencyAvailable IdempotencyReplayState = "available"; IdempotencyLe
 | Push state | N/A: no push operation. | — | — |
 | PR commands | N/A: no PR operation. | — | — |
 
+## Portable Local Root Threat Model
+
+Resolver and Radiograph reject lexical aliases and root symlinks. They bind an `Lstat` directory identity and revalidate it before and after every Git command with no-symlink semantics plus `SameFile`; this fails closed for static or sustained root replacement, including replacement by a symlink to the original inode. This portable local-tool contract does not claim descriptor or inode pinning: an adversarial swap-and-restore wholly during one Git command is explicitly outside the threat model. The used read-only plumbing does not invoke Git hooks; `core.hooksPath`, credential helpers, fsmonitor, diff/textconv, attributes, global/system/injected configuration, optional locks, lazy fetch, replacement objects, prompts, pager, maintenance, and GC are neutralized where applicable. Raw `cat-file blob` and `hash-object --no-filters` do not run repository filters.
+
 ## Migration / Rollout
 
 Delivery is tracker → PR #4 → PR 1c → PR 1d → Unit 2; only the tracker integrates to `develop`. PR 1c is currently 388 changed lines and remains ≤400 with no size exception; PR 1d is separately budgeted ≤400 with no exception and remains required before Unit 2. State is additive; lifecycle tools can be disabled while records remain. No visible-document migration is required.

@@ -4,31 +4,34 @@
 
 | Field | Value |
 |---|---|
-| Changed-line evidence/budget | PR 1c: 388 current; PR 1d: separately budgeted ≤400 |
-| 400-line budget risk | High overall; Medium per child |
+| Changed-line budget | Each child: ≤400 additions+deletions; first slice is 2a2.1b paths only |
+| 400-line budget risk | High overall; Low per child |
 | Chained PRs recommended | Yes |
-| Suggested split | tracker→#3→#4/1b→PR 1c→PR 1d→Unit 2→Unit 3 |
-| Delivery strategy | ask-on-risk, resolved by user-selected split |
+| Suggested split | 2a1 → 2a2.1a → 2a2.1b paths → 2a2.1c oracle → 2a2.2 → 2b → 2c → 3 |
+| Delivery strategy | ask-on-risk, resolved by approved chain |
 | Chain strategy | feature-branch-chain |
 
 Decision needed before apply: No
 Chained PRs recommended: Yes
 Chain strategy: feature-branch-chain
 400-line budget risk: High
-No `size:exception`: PR 1c and PR 1d must each remain ≤400 changed lines.
+No `size:exception`: every child is capped at 400 additions+deletions.
 
 ### Suggested Work Units
 
 | Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
 |---|---|---|---|---|---|
-| 1 | Domain/DB | #3←tracker | `go test ./internal/domain ./internal/adapters/sqlite` | Lifecycle scenario | domain/DB |
-| 1b | Correction | #4/1b←#3 | `go test ./internal/domain` | Identity scenario | domain + tests |
-| 1c | Historical v1→v2 migration foundation; no Save replay integration | PR 1c base=PR #4 | `go test ./internal/adapters/sqlite` | exact v1 fixture→migration | migration/schema tests only |
-| 1d | Typed replay integrity and terminal proof | PR 1d base=PR 1c | `go test ./internal/domain ./internal/adapters/sqlite` | migrated-key refusal and fresh-v2 replay | replay domain/Save/tests/evidence |
-| 2 | Radiography | Unit 2 base=completed PR 1d | `go test ./internal/app ./internal/adapters/git ./internal/adapters/mcp` | Stdio radiograph→plan | service/resolver/MCP |
-| 3 | Catalog | Unit 3←Unit 2 | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | Stdio authorize→edit→verify | catalog/audit/verify |
+| 2a1 | Inventory/classification | base=PR #6 | `go test ./internal/adapters/git` | temporary Git fixture | recorded 2a1-only hunks |
+| 2a2.1a | Safe Git execution/root binding | PR #7; `fix/living-documentation-lifecycle-02a2-git-safety`, base=PR #7 | `go test ./internal/adapters/git -run 'TestResolver(RadiographUsesReadOnlyGitCommands|RejectsRootReplacementBeforeEvidence)$'` | traversal/subdir/symlink and root-replacement fixtures | root contract, binding, safe-env hunks |
+| 2a2.1b | Linked-worktree path resolution | base=completed 2a2.1a branch | `go test ./internal/adapters/git -run 'Test(RadiographPaths|ResolverRadiographPaths)'` | ordinary + linked worktree path fixtures | git-dir/common-dir/index/config/hooks/object path hunks |
+| 2a2.1c | Complete no-write snapshot oracle | base=completed 2a2.1b paths branch | `go test ./internal/adapters/git -run 'Test.*(Snapshot|NoWrite|Worktree)'` | ordinary + linked worktree before/after `Radiograph` | snapshot-oracle hunks |
+| 2a2.2 | Stage/scope safety | base=completed 2a2.1c oracle branch | `go test ./internal/adapters/git -run 'Test.*(Unmerged|Staged|Unborn|EmptyIndex|CommitA)'` | unmerged/staged/unborn/initial/empty-index/`commit -a` oracle | stage identity/output hunks |
+| 2b | Planning service | base=2a2.2 branch | `go test ./internal/app` | radiography→bounded plan | service/tests only |
+| 2c | MCP staging | base=2b branch | `go test ./internal/adapters/mcp` | stdio radiography→plan | MCP adapter/tests only |
+| 3a | Catalog import and evidence | base=2c branch | `go test ./internal/app -run 'TestCatalogService'` | in-memory catalog service | catalog import/evidence only |
+| 3b | Catalog persistence and verification | base=3a branch | `go test ./internal/app ./internal/adapters/mcp ./internal/adapters/sqlite` | stdio authorize→edit→verify | catalog/audit/verify |
 
-Feature-chain: tracker→PR #3→PR #4→PR 1c→PR 1d→Unit 2; only tracker merges to `develop`.
+Feature-chain: tracker→#3→#4→1c→1d→#6→2a1→2a2.1a→2a2.1b paths→2a2.1c oracle→2a2.2→2b→2c→3a→3b; only tracker merges to `develop`. Each child targets its immediate parent and must be retargeted/rebased if polluted.
 
 ## Unit 1
 
@@ -46,31 +49,73 @@ Feature-chain: tracker→PR #3→PR #4→PR 1c→PR 1d→Unit 2; only tracker me
 
 ## PR 1c: Migration Foundation
 
-- [x] 1.9 Characterization/proof: `internal/adapters/sqlite/lifecycle_test.go` exact multi-record v1 fixture; assert every provenance/idempotency value survives with NULL links and `legacy_unavailable`.
-- [x] 1.10 Characterization/proof: inject migration failure and compare pre/post table schemas, every row/value, and `schema_migrations` version exactly.
-- [x] 1.11 GREEN: `internal/adapters/sqlite/lifecycle.go` transactionally rebuilds v1 tables into v2; fresh DB creates v2 directly; no invented association or replay wiring.
-- [x] 1.12 Evidence: record focused/runtime/check-only results and exact PR 1c Git accounting; state migration proof only and its isolated rollback boundary.
+- [x] 1.9 Characterization: exact multi-record v1 fixture; preserve values, NULL links, `legacy_unavailable`.
+- [x] 1.10 Characterization: injected migration failure preserves schema, rows, and version exactly.
+- [x] 1.11 GREEN: transactional v1→v2 rebuild; fresh v2; no invented association/replay wiring.
+- [x] 1.12 Evidence: focused/runtime/check-only results and isolated rollback boundary.
 
 ## PR 1d: Replay Integrity
 
-- [ ] 1.13 RED: domain/SQLite lifecycle tests require typed `IdempotencyReplayState` (`available`, `legacy_unavailable`) and every migrated-key refusal before validation, transaction, execution, or audit mutation.
-- [ ] 1.14 RED: prove a new-v2 `available` key returns its exact replay; migrated refusals leave records and audit unchanged.
-- [ ] 1.15 GREEN: `internal/domain/lifecycle.go` and `internal/adapters/sqlite/lifecycle.go` use typed state/error and pre-validation, pre-`BEGIN IMMEDIATE` legacy lookup/refusal.
-- [ ] 1.16 Evidence: cumulative focused/runtime/full/check-only results; truthful exact Git accounting and complete cross-slice rollback proof/boundary.
+- [x] 1.13 RED: typed replay state and migrated-key refusal before validation, transaction, execution, or audit mutation.
+- [x] 1.14 RED: exact fresh-v2 replay; migrated refusal leaves records/audit unchanged.
+- [x] 1.15 GREEN: typed state/error and pre-validation, pre-transaction legacy refusal.
+- [x] 1.16 Evidence: cumulative proof, exact accounting, and rollback boundary.
 
-## Unit 2
+## Unit 2a1: Repository Inventory & Classification (base=PR #6 `a051667`)
 
-- [ ] 2.1 RED: `internal/adapters/git/resolver_test.go` excludes non-doc/generated inputs; reports reason/uncertainty.
-- [ ] 2.2 RED: resolver root variants and staged/empty-index/`commit -a` make no writes or state changes.
-- [ ] 2.3 GREEN: `internal/adapters/git/resolver.go` read-only discovery, evidence, exclusions, ownership uncertainty.
-- [ ] 2.4 RED: `internal/app/lifecycle_service_test.go` radiography, denial, policy/batch, in-plan/blocked actions.
-- [ ] 2.5 GREEN: `internal/app/lifecycle_service.go` bounded plan/batch/policy and local provenance; no authoring.
-- [ ] 2.6 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` staged tools, ownership conflict, no visible writes.
+- [x] 2.1 RED: `internal/adapters/git/resolver_test.go` inventories applicable tracked/untracked Markdown/MDX with deterministic evidence/reasons.
+- [x] 2.2 GREEN: `internal/adapters/git/resolver.go` applies non-doc, symlink, generated/vendor, executable precedence; location never proves maintained.
+- [x] 2.3 Evidence: real-Git fixture, compatibility/full/check/accounting, and 2a1-only rollback boundary.
 
-## Unit 3
+## Unit 2a2.1a: Safe Git Execution & Root Binding (base=PR #7)
 
-- [ ] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
-- [ ] 3.2 RED: same test covers evidenced update/review/orphan/conflict/no-action, never truthfulness.
-- [ ] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
-- [ ] 3.4 GREEN: `internal/app/lifecycle_service.go`/`internal/domain/lifecycle.go` catalog/audit/orphan/verification; idempotent MCP.
-- [ ] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
+- [x] 2.4 RED: `resolver_test.go` rejects traversal, subdirectory, and symlink aliases; detects root replacement between physical validation and command use.
+- [x] 2.5 GREEN: `resolver.go` binds exact lexical/physical root identity and centralizes read-only Git env: optional locks, lazy fetch, replacements, external diff/textconv, fsmonitor, system/global config/attributes disabled as applicable.
+- [x] 2.6 Evidence: fixtures prove safe failure/no execution on root replacement; exact accounting is ≤400 additions+deletions and only 2a2.1a files/behavior revert.
+
+## Unit 2a2.1b: Linked-worktree Path Resolution (base=completed 2a2.1a)
+
+- [x] 2.7 RED: `resolver_test.go` frames ordinary/linked git-dir and common-dir output without whitespace loss; malformed and non-absolute output fails closed.
+- [x] 2.8 GREEN: test-owned resolver exposes exact git-dir, common-dir, index, config, hooks, primary-object, and relative alternate-object paths; missing resolved paths fail closed without changing `Radiograph` behavior.
+- [x] 2.9 Evidence: focused spaced ordinary/linked fixtures, resolver and 2a2.1a regressions, compatibility/full/check/accounting pass; paths-only rollback is isolated.
+
+## Unit 2a2.1c: Complete No-write Snapshot Oracle (base=completed 2a2.1b paths)
+
+- [x] 2.10 RED: `resolver_test.go` defines complete ordinary/linked before/after no-write snapshots for worktree, index, config, hooks, primary/alternate objects, and `.docmanager`.
+- [x] 2.11 GREEN: implement test-only complete snapshot identity and fail-closed special-file/symlink-target/read errors; prove sensitivity for every bound field.
+- [x] 2.12 Evidence: record ordinary/linked no-write receipts, exact accounting, and snapshot-only rollback.
+
+## Unit 2a2.2: Stage & Scope Safety (base=completed 2a2.1c oracle)
+
+- [x] 2.13 RED: `resolver_test.go` proves unmerged stage identity/output using the completed snapshot oracle.
+- [x] 2.14 RED/GREEN: apply the oracle to staged, unborn, initial, empty-index, and `commit -a` scenarios.
+- [x] 2.15 Evidence: record exact receipts/accounting (≤400 additions+deletions) and stage-only rollback.
+
+## Unit 2b: Planning Service (base=completed 2a2.2)
+
+- [x] 2.16 RED: `internal/app/lifecycle_service_test.go` covers radiography, denial, policy/batch, and in-plan/blocked actions.
+- [x] 2.17 GREEN: `internal/app/lifecycle_service.go` creates bounded plan/batch/policy and local provenance; no authoring.
+
+## Unit 2c: MCP Staging (base=completed 2b)
+
+- [x] 2.18 RED/GREEN: `internal/adapters/mcp/{mcp_test.go,mcp.go}` stages tools/conflicts and stdio radiography→plan without visible writes.
+
+## Unit 3a: Catalog Import & Evidence (base=completed 2c)
+
+- [x] 3.1 RED: `internal/app/lifecycle_service_test.go` imports/provenance, stale/uncertain/orphan, no visible mutation.
+- [x] 3.2 RED: evidenced update/review/orphan/conflict/no-action, never truthfulness.
+
+## Unit 3b: Catalog Persistence & Verification (base=completed 3a)
+
+- [x] 3.3 RED: `VerifyOutcome` rejects inactive/out-of-plan/stale/revision-scope-baseline mismatch.
+- [x] 3.4 GREEN: catalog/audit/orphan/verification and idempotent MCP.
+- [x] 3.5 REFACTOR/verify: focused/stdio/`go test ./...`; runtime/rollback per commit.
+
+## Unit 2 Mapping
+
+| Old | New |
+|---|---|
+| 2a2.1 / 2.4–2.6 (checked candidate) | 2a2.1a / 2.4–2.6 (checked) + 2a2.1b paths / 2.7–2.9 (checked) + 2a2.1c oracle / 2.10–2.12 (checked) |
+| 2a2.2 / 2.7–2.9 | 2a2.2 / 2.13–2.15 |
+| 2b / 2.10–2.11 | 2b / 2.16–2.17 |
+| 2c / 2.12 | 2c / 2.18 |
