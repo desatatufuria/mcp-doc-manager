@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -225,6 +227,17 @@ type DurableCatalogStore interface {
 	SaveCatalog(context.Context, string, domain.CatalogWrite) (string, error)
 }
 
+type CatalogAuditStore interface {
+	LoadCatalog(context.Context) ([]domain.CatalogEntry, error)
+	SaveAudit(context.Context, string, domain.CatalogAuditWrite) (string, error)
+}
+
+type CatalogAuditRequest struct {
+	Repository, Actor, Interaction, Request, IdempotencyKey string
+	Scope                                                   domain.Scope
+}
+type CatalogAuditResult struct{ Assessments []CatalogAssessmentResult }
+
 type CatalogRecord struct {
 	Import       *CatalogImportResult
 	Assessment   *CatalogAssessmentResult
@@ -282,7 +295,12 @@ func (s CatalogService) ImportAndPersist(ctx context.Context, store DurableCatal
 }
 
 // CatalogService derives in-memory catalog evidence; it never writes visible documents.
-type CatalogService struct{ Clock func() time.Time }
+type CatalogService struct {
+	Clock        func() time.Time
+	Resolver     EvidenceResolver
+	Radiographer RadiographyService
+	AuditStore   CatalogAuditStore
+}
 
 func (s CatalogService) Import(request CatalogImportRequest) CatalogImportResult {
 	if request.Plan.State != domain.PlanApproved || !completeCatalogPlan(request.Plan) || request.Evidence == "" || request.Actor == "" || request.Interaction == "" || request.Request == "" || request.IdempotencyKey == "" {
@@ -306,6 +324,9 @@ func (s CatalogService) Import(request CatalogImportRequest) CatalogImportResult
 			Path: document.Path, Purpose: "existing_documentation", Audience: request.Plan.Audience, Owner: request.Plan.Owner,
 			RelatedAreas: []string{request.Plan.VisibleStorage}, State: domain.CatalogImported, Evidence: evidence,
 		}
+		if len(request.Documents) > 0 {
+			entry.Digest = request.Documents[i].Digest
+		}
 		result.Entries = append(result.Entries, entry)
 		result.Provenance = append(result.Provenance, domain.Provenance{
 			Authority: domain.DeclaredLocalProvenance, DeclaredActor: request.Actor, Interaction: request.Interaction,
@@ -315,6 +336,142 @@ func (s CatalogService) Import(request CatalogImportRequest) CatalogImportResult
 		})
 	}
 	return result
+}
+
+func (s CatalogService) AuditChange(ctx context.Context, request CatalogAuditRequest) (CatalogAuditResult, error) {
+	if s.Resolver == nil || request.Scope.Validate() != nil {
+		return CatalogAuditResult{}, domain.ErrUnsupportedRequest
+	}
+	evidence, err := s.Resolver.Resolve(ctx, request.Repository, request.Scope)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	return s.audit(ctx, request, "change", evidence.Identity, func(entry domain.CatalogEntry) (domain.AuditResult, string) {
+		for _, changed := range evidence.ChangedPaths {
+			if changed == entry.Path {
+				digest, ok := evidence.DocumentationDigests[entry.Path]
+				if !ok {
+					return domain.AuditReview, "changed document evidence is incomplete"
+				}
+				if digest == "missing" {
+					return domain.AuditOrphan, "scoped evidence proves the document is missing"
+				}
+				if digest == entry.Digest {
+					return domain.AuditNoAction, "resolved document digest matches the catalog"
+				}
+				return domain.AuditUpdate, "catalog document changed in the resolved scope"
+			}
+			for _, area := range entry.RelatedAreas {
+				if changed == area || strings.HasPrefix(changed, strings.TrimSuffix(area, "/")+"/") {
+					return domain.AuditUpdate, "an explicitly related catalog area changed"
+				}
+			}
+		}
+		return domain.AuditNoAction, "resolved scope has no mapped catalog change"
+	})
+}
+
+func (s CatalogService) AuditOnDemand(ctx context.Context, request CatalogAuditRequest) (CatalogAuditResult, error) {
+	if s.Radiographer == nil || request.Scope != (domain.Scope{}) {
+		return CatalogAuditResult{}, domain.ErrUnsupportedRequest
+	}
+	report, err := s.Radiographer.Radiograph(ctx, request.Repository)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	documents := map[string]gitadapter.DocumentationEvidence{}
+	for _, document := range report.Documentation {
+		documents[document.Path] = document
+	}
+	return s.audit(ctx, request, "on_demand", report.Identity, func(entry domain.CatalogEntry) (domain.AuditResult, string) {
+		document, ok := documents[entry.Path]
+		if !ok {
+			return domain.AuditOrphan, "current radiography proves the document is missing"
+		}
+		if radiographyConflicts(entry, report) {
+			return domain.AuditConflict, "current radiography contains conflicting mapped evidence"
+		}
+		if document.Digest == "" {
+			return domain.AuditReview, "current document evidence is incomplete"
+		}
+		if entry.Digest != "" && document.Digest != entry.Digest {
+			return domain.AuditUpdate, "current document digest differs from the catalog"
+		}
+		if document.Classification == "uncertain" || report.Ownership.Uncertain {
+			return domain.AuditReview, "current radiography remains uncertain"
+		}
+		return domain.AuditNoAction, "current radiography maps no catalog change"
+	})
+}
+
+func (s CatalogService) audit(ctx context.Context, request CatalogAuditRequest, trigger, evidence string, assess func(domain.CatalogEntry) (domain.AuditResult, string)) (CatalogAuditResult, error) {
+	if s.AuditStore == nil || request.Repository == "" || request.Actor == "" || request.Interaction == "" || request.Request == "" || request.IdempotencyKey == "" || evidence == "" {
+		return CatalogAuditResult{}, ErrCatalogEvidenceRequired
+	}
+	entries, err := s.AuditStore.LoadCatalog(ctx)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	scope, _ := json.Marshal(request.Scope)
+	result := CatalogAuditResult{Assessments: make([]CatalogAssessmentResult, len(entries))}
+	write := domain.CatalogAuditWrite{Entries: entries}
+	for i := range entries {
+		kind, rationale := assess(entries[i])
+		audit := domain.Audit{ID: stableID("audit", trigger, request.IdempotencyKey, entries[i].Path, evidence), Trigger: trigger, Path: entries[i].Path, Scope: string(scope), Evidence: evidence, Rationale: rationale, State: domain.AuditReported, Result: kind}
+		switch kind {
+		case domain.AuditUpdate:
+			write.Entries[i].State = domain.CatalogStale
+		case domain.AuditReview, domain.AuditConflict:
+			write.Entries[i].State = domain.CatalogUncertain
+		case domain.AuditOrphan:
+			write.Entries[i].State = domain.CatalogOrphan
+			action := domain.PendingAction{ID: stableID("orphan", entries[i].Path, evidence), Path: entries[i].Path, AuditID: audit.ID, Evidence: evidence, State: domain.PendingOpen}
+			for j, pending := range write.Entries[i].PendingActions {
+				if pending.ID == action.ID && pending.State == domain.PendingOpen {
+					action = pending
+					write.Entries[i].PendingActions[j], write.Entries[i].PendingActions[len(write.Entries[i].PendingActions)-1] = write.Entries[i].PendingActions[len(write.Entries[i].PendingActions)-1], pending
+					break
+				}
+			}
+			write.Actions = append(write.Actions, action)
+			if len(write.Entries[i].PendingActions) == 0 || write.Entries[i].PendingActions[len(write.Entries[i].PendingActions)-1].ID != action.ID {
+				write.Entries[i].PendingActions = append(write.Entries[i].PendingActions, action)
+			}
+		}
+		write.Audits = append(write.Audits, audit)
+		result.Assessments[i] = CatalogAssessmentResult{Entry: write.Entries[i], Audit: audit}
+	}
+	canonical, _ := json.Marshal([]string{trigger, request.Repository, request.Actor, request.Interaction, request.Request, evidence, string(scope)})
+	payload, _ := json.Marshal(result)
+	write.Request, write.Result = string(canonical), string(payload)
+	write.Provenance = domain.Provenance{Authority: domain.DeclaredLocalProvenance, DeclaredActor: request.Actor, Interaction: request.Interaction, Context: request.Repository, Operation: "catalog_audit", Request: request.Request, IdempotencyKey: request.IdempotencyKey, Time: s.now().Format(time.RFC3339Nano), Approval: "not_required", Evidence: evidence, Input: write.Request, Result: "reported", Versions: "catalog/v4"}
+	stored, err := s.AuditStore.SaveAudit(ctx, request.IdempotencyKey, write)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	if json.Unmarshal([]byte(stored), &result) != nil {
+		return CatalogAuditResult{}, domain.ErrLifecycle
+	}
+	return result, nil
+}
+
+func stableID(parts ...string) string {
+	raw, _ := json.Marshal(parts)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func radiographyConflicts(entry domain.CatalogEntry, report gitadapter.Radiography) bool {
+	for _, finding := range append(report.Findings, report.Context...) {
+		for _, conflict := range finding.Conflicts {
+			for _, evidence := range conflict.Evidence {
+				if evidence.Path == entry.Path {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func completeCatalogPlan(plan Plan) bool {

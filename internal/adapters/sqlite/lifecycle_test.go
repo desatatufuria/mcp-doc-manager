@@ -19,7 +19,7 @@ func TestLifecycleOwnsWorkspaceAndMigratesForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if got, err := l.Version(context.Background()); err != nil || got != 3 {
+	if got, err := l.Version(context.Background()); err != nil || got != 4 {
 		t.Fatalf("Version() = %d, %v", got, err)
 	}
 	for _, table := range []string{"catalog_entries", "catalog_imports", "initial_policy", "catalog_policy_current"} {
@@ -169,14 +169,14 @@ func TestLifecycleMigratesOlderSchemaAndRollsBackFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if got, err := l.Version(context.Background()); err != nil || got != 3 {
+	if got, err := l.Version(context.Background()); err != nil || got != 4 {
 		t.Fatalf("forward migration = %d, %v", got, err)
 	}
-	if err := l.migrateOne(context.Background(), 4, `CREATE TABLE rejected(`); !errors.Is(err, domain.ErrLifecycle) {
+	if err := l.migrateOne(context.Background(), 5, `CREATE TABLE rejected(`); !errors.Is(err, domain.ErrLifecycle) {
 		t.Fatalf("failed migration = %v", err)
 	}
 	var n int
-	if err := l.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version=4`).Scan(&n); err != nil || n != 0 {
+	if err := l.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version=5`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("rollback version = %d, %v", n, err)
 	}
 	if err := l.db.QueryRow(`SELECT COUNT(*) FROM lifecycle_records`).Scan(&n); err != nil || n != 0 {
@@ -222,7 +222,7 @@ func TestLifecycleMigratesCompleteHistoricalV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	if got, err := l.Version(context.Background()); err != nil || got != 3 {
+	if got, err := l.Version(context.Background()); err != nil || got != 4 {
 		t.Fatalf("version = %d, %v", got, err)
 	}
 	if got, err := l.Count(context.Background()); err != nil || got != 2 {
@@ -286,11 +286,39 @@ func TestLifecycleSaveCatalogIsAtomicReplayableAndConflictSafe(t *testing.T) {
 	p.IdempotencyKey = "catalog-rollback"
 	write.Request, write.Provenance = `{"plan":"rollback"}`, p
 	write.Imports[0].Provenance = p
-	if _, err := l.db.Exec(`CREATE TRIGGER fail_catalog_import BEFORE INSERT ON catalog_imports BEGIN SELECT RAISE(ABORT, 'stop'); END`); err != nil {
+	if _, err := l.db.Exec(`CREATE TRIGGER fail_catalog_import BEFORE INSERT ON catalog_imports WHEN NEW.idempotency_key='catalog-rollback' BEGIN SELECT RAISE(ABORT, 'stop'); END`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := l.SaveCatalog(context.Background(), "catalog-rollback", write); !errors.Is(err, domain.ErrLifecycle) || snapshotV3(t, l.db) != before {
 		t.Fatalf("rollback = %v", err)
+	}
+	entries, err := l.LoadCatalog(context.Background())
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("LoadCatalog() = %#v, %v", entries, err)
+	}
+	ap := provenance("audit-input")
+	ap.IdempotencyKey, ap.Operation = "audit-1", "catalog_audit"
+	audit := domain.Audit{ID: "audit-id-1", Trigger: "change", Path: entry.Path, Scope: `{"kind":"worktree"}`, State: domain.AuditReported, Result: domain.AuditOrphan, Evidence: "evidence-1", Rationale: "missing"}
+	action := domain.PendingAction{ID: "action-id", Path: entry.Path, AuditID: audit.ID, State: domain.PendingOpen, Evidence: audit.Evidence}
+	aw := domain.CatalogAuditWrite{Request: `{"audit":"one"}`, Result: `{"stored":"audit"}`, Provenance: ap, Entries: entries, Audits: []domain.Audit{audit}, Actions: []domain.PendingAction{action}}
+	first, err = l.SaveAudit(context.Background(), "audit-1", aw)
+	replay, replayErr := l.SaveAudit(context.Background(), "audit-1", aw)
+	if err != nil || replayErr != nil || first != aw.Result || replay != first {
+		t.Fatalf("SaveAudit/replay = %q/%q, %v/%v", first, replay, err, replayErr)
+	}
+	aw.Request = `{"audit":"divergent"}`
+	if _, err := l.SaveAudit(context.Background(), "audit-1", aw); !errors.Is(err, domain.ErrIdempotencyConflict) {
+		t.Fatalf("audit conflict = %v", err)
+	}
+	if err := l.db.QueryRow(`SELECT (SELECT COUNT(*) FROM catalog_audits)||'|'||(SELECT COUNT(*) FROM orphan_actions)`).Scan(&first); err != nil || first != "1|1" {
+		t.Fatalf("audit/action counts = %q, %v", first, err)
+	}
+	if _, err := l.db.Exec(`CREATE TRIGGER fail_orphan BEFORE INSERT ON orphan_actions BEGIN SELECT RAISE(ABORT,'stop'); END`); err != nil {
+		t.Fatal(err)
+	}
+	aw.Request, aw.Provenance.IdempotencyKey, aw.Audits[0].ID, aw.Actions[0].ID = `{"audit":"fail"}`, "audit-fail", "audit-id-fail", "action-id-fail"
+	if _, err := l.SaveAudit(context.Background(), "audit-fail", aw); !errors.Is(err, domain.ErrLifecycle) || snapshotV3(t, l.db) != "2|2|2|1|1|1|1" {
+		t.Fatalf("audit rollback = %v", err)
 	}
 }
 
@@ -401,6 +429,16 @@ func TestLifecycleV3MigrationFailurePreservesV2Exactly(t *testing.T) {
 	}
 	if after := snapshotV2(t, db); !reflect.DeepEqual(after, before) {
 		t.Fatalf("v3 failure changed v2 snapshot: got %#v want %#v", after, before)
+	}
+	if _, err := db.Exec(`DROP TRIGGER fail_v3_version; ` + v3Schema + `; INSERT INTO schema_migrations VALUES(3); INSERT INTO catalog_entries VALUES('docs/v3.md','guide','contributors','docs','["docs"]','active','tracked','','[]',1); INSERT INTO catalog_imports VALUES(1,'docs/v3.md','sha256:v3','','','','','','','','','','','','','')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := l.LoadCatalog(context.Background())
+	if err != nil || len(entries) != 1 || entries[0].Digest != "sha256:v3" {
+		t.Fatalf("migrated v3 catalog = %#v, %v", entries, err)
 	}
 }
 
