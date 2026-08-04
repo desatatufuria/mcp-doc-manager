@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -119,14 +121,14 @@ func TestCatalogServiceImportsApprovedInPlaceDocumentsWithLocalProvenance(t *tes
 		ExistingDocuments: []ExistingDocumentTreatment{{Path: "docs/guide.md", Treatment: InPlaceInventory}},
 	}
 	result := service.Import(CatalogImportRequest{
-		Plan: plan, Actor: "local-user", Interaction: "mcp:import-catalog", Request: "request-import", IdempotencyKey: "key-import", Evidence: "sha256:repository",
+		Plan: plan, Policy: Policy{Mode: ApprovalRequired, Approved: true}, Documents: []CatalogDocumentImport{{Path: "docs/guide.md", Evidence: "tracked", Digest: "sha256:guide"}}, Actor: "local-user", Interaction: "mcp:import-catalog", Request: "request-import", IdempotencyKey: "key-import", Evidence: "sha256:repository",
 	})
 	if result.Err != nil {
 		t.Fatal(result.Err)
 	}
 	want := domain.CatalogEntry{
 		Path: "docs/guide.md", Purpose: "existing_documentation", Audience: "contributors", Owner: "docs-team", RelatedAreas: []string{"docs"},
-		State: domain.CatalogImported, Evidence: "sha256:repository",
+		State: domain.CatalogImported, Evidence: "tracked",
 	}
 	if !reflect.DeepEqual(result.Entries, []domain.CatalogEntry{want}) {
 		t.Fatalf("entries = %#v", result.Entries)
@@ -159,13 +161,86 @@ func TestCatalogServiceRejectsImportsMissingPlanProvenance(t *testing.T) {
 				incomplete.VisibleStorage = ""
 			}
 			result := service.Import(CatalogImportRequest{
-				Plan: incomplete, Actor: "local-user", Interaction: "mcp:import-catalog", Request: "request-import", IdempotencyKey: "key-import", Evidence: "sha256:repository",
+				Plan: incomplete, Policy: Policy{Mode: ApprovalRequired, Approved: true}, Documents: []CatalogDocumentImport{{Path: "docs/guide.md", Evidence: "tracked", Digest: "sha256:guide"}}, Actor: "local-user", Interaction: "mcp:import-catalog", Request: "request-import", IdempotencyKey: "key-import", Evidence: "sha256:repository",
 			})
 			if !errors.Is(result.Err, ErrCatalogEvidenceRequired) || len(result.Entries) != 0 || len(result.Provenance) != 0 {
 				t.Fatalf("result = %#v", result)
 			}
 		})
 	}
+}
+
+func TestCatalogServicePersistsApprovedImportAndRejectsIncompleteMetadataBeforeStore(t *testing.T) {
+	root := t.TempDir()
+	store, err := sqliteadapter.OpenLifecycle(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	request := CatalogImportRequest{
+		Plan:   Plan{State: domain.PlanApproved, Revision: "plan-1", VisibleStorage: "docs", Audience: "contributors", Owner: "docs-team", ExistingDocuments: []ExistingDocumentTreatment{{Path: "docs/a.md", Treatment: InPlaceInventory}, {Path: "docs/b.md", Treatment: InPlaceInventory}}},
+		Policy: Policy{Mode: ApprovalRequired, Approved: true}, Documents: []CatalogDocumentImport{{Path: "docs/a.md", Evidence: "tracked", Digest: "sha256:a"}, {Path: "docs/b.md", Evidence: "tracked", Digest: "sha256:b"}}, Actor: "local-user", Interaction: "app:import", Request: "request-1", IdempotencyKey: "import-1", Evidence: "sha256:repository",
+	}
+	service := CatalogService{Clock: fixedPlanningClock}
+	first, err := service.ImportAndPersist(context.Background(), store, request)
+	if err != nil || len(first.Entries) != 2 {
+		t.Fatalf("ImportAndPersist() = %#v, %v", first, err)
+	}
+	replay, err := service.ImportAndPersist(context.Background(), store, request)
+	if err != nil || !reflect.DeepEqual(replay, first) {
+		t.Fatalf("replay = %#v, %v", replay, err)
+	}
+	before, _ := store.Count(context.Background())
+	for name, mutate := range map[string]func(*CatalogImportRequest){
+		"plan":     func(r *CatalogImportRequest) { r.Plan.Revision = "plan-2" },
+		"policy":   func(r *CatalogImportRequest) { r.Policy.Mode = AutomaticAfterApprovedPlan },
+		"metadata": func(r *CatalogImportRequest) { r.Plan.Owner = "other-team" },
+		"paths": func(r *CatalogImportRequest) {
+			r.Plan.ExistingDocuments = []ExistingDocumentTreatment{{Path: "docs/c.md", Treatment: InPlaceInventory}}
+			r.Documents = []CatalogDocumentImport{{Path: "docs/c.md", Evidence: "tracked", Digest: "sha256:c"}}
+		},
+		"evidence": func(r *CatalogImportRequest) { r.Evidence = "sha256:other" },
+		"action": func(r *CatalogImportRequest) {
+			r.Plan.Actions = []domain.PlannedAction{{Path: "docs/a.md", Kind: domain.ActionUpdate}}
+		},
+	} {
+		changed := request
+		mutate(&changed)
+		if _, err := service.ImportAndPersist(context.Background(), store, changed); !errors.Is(err, domain.ErrIdempotencyConflict) {
+			t.Fatalf("divergent %s = %v", name, err)
+		}
+		if after, _ := store.Count(context.Background()); before != after {
+			t.Fatalf("divergent %s changed lifecycle count: %d -> %d", name, before, after)
+		}
+	}
+	capture := &countingCatalogStore{}
+	policyRequest := request
+	policyRequest.Request, policyRequest.IdempotencyKey = "request-policy", "import-policy"
+	if _, err := service.ImportAndPersist(context.Background(), capture, policyRequest); err != nil || capture.write.Policy.Revision != "policy:plan-1:request-policy" || capture.write.Policy.Revision == capture.write.Policy.Mode {
+		t.Fatalf("initial policy revision = %#v, %v", capture.write.Policy, err)
+	}
+	fake := &countingCatalogStore{}
+	incomplete := request
+	incomplete.IdempotencyKey = "incomplete"
+	incomplete.Documents = append([]CatalogDocumentImport(nil), request.Documents...)
+	incomplete.Documents[0].Digest = ""
+	if _, err := service.ImportAndPersist(context.Background(), fake, incomplete); !errors.Is(err, ErrCatalogEvidenceRequired) || fake.calls != 0 {
+		t.Fatalf("incomplete import = %v, store calls %d", err, fake.calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs", "a.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("visible document was written: %v", err)
+	}
+}
+
+type countingCatalogStore struct {
+	calls int
+	write domain.CatalogWrite
+}
+
+func (s *countingCatalogStore) SaveCatalog(_ context.Context, _ string, write domain.CatalogWrite) (string, error) {
+	s.calls++
+	s.write = write
+	return write.Result, nil
 }
 
 func TestCatalogServiceAssessesStaleUncertainAndOrphanEvidenceWithoutMutation(t *testing.T) {

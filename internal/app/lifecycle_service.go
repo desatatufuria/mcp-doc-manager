@@ -178,8 +178,12 @@ func planningProvenance(request PlanningRequest, result PlanningResult, now time
 
 type CatalogImportRequest struct {
 	Plan                                                  Plan
+	Policy                                                Policy
+	Documents                                             []CatalogDocumentImport
 	Actor, Interaction, Request, IdempotencyKey, Evidence string
 }
+
+type CatalogDocumentImport struct{ Path, Evidence, Digest string }
 
 type CatalogImportResult struct {
 	Entries    []domain.CatalogEntry
@@ -217,6 +221,10 @@ type CatalogStore interface {
 	Save(context.Context, string, string, domain.Provenance) (string, error)
 }
 
+type DurableCatalogStore interface {
+	SaveCatalog(context.Context, string, domain.CatalogWrite) (string, error)
+}
+
 type CatalogRecord struct {
 	Import       *CatalogImportResult
 	Assessment   *CatalogAssessmentResult
@@ -238,6 +246,41 @@ func PersistCatalog(ctx context.Context, store CatalogStore, key string, provena
 	return record, nil
 }
 
+func (s CatalogService) ImportAndPersist(ctx context.Context, store DurableCatalogStore, request CatalogImportRequest) (CatalogImportResult, error) {
+	if !request.Policy.Approved || !validPolicy(request.Policy.Mode) || len(request.Documents) != len(request.Plan.ExistingDocuments) {
+		return CatalogImportResult{Err: ErrCatalogEvidenceRequired}, ErrCatalogEvidenceRequired
+	}
+	result := s.Import(request)
+	if result.Err != nil {
+		return result, result.Err
+	}
+	record := CatalogRecord{Import: &result}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return CatalogImportResult{}, err
+	}
+	canonical, err := json.Marshal(request)
+	if err != nil {
+		return CatalogImportResult{}, err
+	}
+	imports := make([]domain.CatalogImport, len(request.Documents))
+	for i, document := range request.Documents {
+		imports[i] = domain.CatalogImport{Path: document.Path, Digest: document.Digest, Provenance: result.Provenance[i]}
+	}
+	policyRevision := "policy:" + request.Plan.Revision + ":" + request.Request
+	stored, err := store.SaveCatalog(ctx, request.IdempotencyKey, domain.CatalogWrite{
+		Request: string(canonical), Result: string(payload), Provenance: result.Provenance[0], Entries: result.Entries, Imports: imports,
+		Policy: domain.InitialPolicy{Revision: policyRevision, Mode: string(request.Policy.Mode), Approved: request.Policy.Approved},
+	})
+	if err != nil {
+		return CatalogImportResult{}, err
+	}
+	if err := json.Unmarshal([]byte(stored), &record); err != nil || record.Import == nil {
+		return CatalogImportResult{}, domain.ErrLifecycle
+	}
+	return *record.Import, nil
+}
+
 // CatalogService derives in-memory catalog evidence; it never writes visible documents.
 type CatalogService struct{ Clock func() time.Time }
 
@@ -246,19 +289,28 @@ func (s CatalogService) Import(request CatalogImportRequest) CatalogImportResult
 		return CatalogImportResult{Err: ErrCatalogEvidenceRequired}
 	}
 	result := CatalogImportResult{}
-	for _, document := range request.Plan.ExistingDocuments {
-		if document.Path == "" || document.Treatment != InPlaceInventory {
+	seen := map[string]bool{}
+	for i, document := range request.Plan.ExistingDocuments {
+		evidence := request.Evidence
+		if len(request.Documents) > 0 {
+			if i >= len(request.Documents) || request.Documents[i].Path != document.Path || request.Documents[i].Evidence == "" || request.Documents[i].Digest == "" {
+				return CatalogImportResult{Err: ErrCatalogEvidenceRequired}
+			}
+			evidence = request.Documents[i].Evidence
+		}
+		if document.Path == "" || document.Treatment != InPlaceInventory || seen[document.Path] {
 			return CatalogImportResult{Err: ErrCatalogEvidenceRequired}
 		}
+		seen[document.Path] = true
 		entry := domain.CatalogEntry{
 			Path: document.Path, Purpose: "existing_documentation", Audience: request.Plan.Audience, Owner: request.Plan.Owner,
-			RelatedAreas: []string{request.Plan.VisibleStorage}, State: domain.CatalogImported, Evidence: request.Evidence,
+			RelatedAreas: []string{request.Plan.VisibleStorage}, State: domain.CatalogImported, Evidence: evidence,
 		}
 		result.Entries = append(result.Entries, entry)
 		result.Provenance = append(result.Provenance, domain.Provenance{
 			Authority: domain.DeclaredLocalProvenance, DeclaredActor: request.Actor, Interaction: request.Interaction,
 			Context: request.Plan.Revision, Operation: "catalog_import", Request: request.Request, IdempotencyKey: request.IdempotencyKey,
-			Time: s.now().Format(time.RFC3339Nano), Approval: "approved", Evidence: request.Evidence,
+			Time: s.now().Format(time.RFC3339Nano), Approval: "approved", Evidence: evidence,
 			Input: document.Path, Result: string(domain.CatalogImported), Versions: request.Plan.Revision,
 		})
 	}
@@ -266,7 +318,7 @@ func (s CatalogService) Import(request CatalogImportRequest) CatalogImportResult
 }
 
 func completeCatalogPlan(plan Plan) bool {
-	return plan.Revision != "" && plan.Audience != "" && plan.Owner != "" && plan.VisibleStorage != ""
+	return plan.Revision != "" && plan.Audience != "" && plan.Owner != "" && plan.VisibleStorage != "" && len(plan.ExistingDocuments) > 0
 }
 
 func (s CatalogService) Assess(assessment CatalogAssessment) CatalogAssessmentResult {

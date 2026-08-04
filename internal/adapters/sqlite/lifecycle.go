@@ -2,7 +2,10 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -68,13 +71,25 @@ func (l *Lifecycle) migrate(ctx context.Context) error {
 		}
 	}
 	if version < 2 {
-		return l.migrateV2(ctx)
+		if err := l.migrateV2(ctx); err != nil {
+			return err
+		}
+		version = 2
+	}
+	if version < 3 {
+		return l.migrateOne(ctx, 3, v3Schema)
 	}
 	return nil
 }
 
 const v2Provenance = `CREATE TABLE provenance_v2(record_id INTEGER PRIMARY KEY, authority TEXT NOT NULL, actor TEXT NOT NULL, interaction TEXT NOT NULL, context TEXT NOT NULL, operation TEXT NOT NULL, request TEXT NOT NULL, idempotency_key TEXT NOT NULL, time TEXT NOT NULL, approval TEXT NOT NULL, evidence TEXT NOT NULL, input TEXT NOT NULL, result TEXT NOT NULL, versions TEXT NOT NULL)`
 const v2Idempotency = `CREATE TABLE idempotency_v2(key TEXT PRIMARY KEY, input TEXT NOT NULL, identity TEXT NOT NULL, result TEXT NOT NULL, record_id INTEGER, replay_state TEXT NOT NULL CHECK(replay_state IN ('available','legacy_unavailable')))`
+const v3Schema = `CREATE TABLE catalog_entries(path TEXT PRIMARY KEY,purpose TEXT NOT NULL,audience TEXT NOT NULL,owner TEXT NOT NULL,related_areas TEXT NOT NULL,state TEXT NOT NULL,evidence TEXT NOT NULL,last_verification TEXT NOT NULL,pending_actions TEXT NOT NULL,record_id INTEGER NOT NULL);
+CREATE TABLE catalog_imports(record_id INTEGER NOT NULL,path TEXT NOT NULL,digest TEXT NOT NULL,authority TEXT NOT NULL,actor TEXT NOT NULL,interaction TEXT NOT NULL,context TEXT NOT NULL,operation TEXT NOT NULL,request TEXT NOT NULL,idempotency_key TEXT NOT NULL,time TEXT NOT NULL,approval TEXT NOT NULL,evidence TEXT NOT NULL,input TEXT NOT NULL,result TEXT NOT NULL,versions TEXT NOT NULL,PRIMARY KEY(record_id,path));
+CREATE TABLE initial_policy(revision TEXT PRIMARY KEY,mode TEXT NOT NULL,approved INTEGER NOT NULL CHECK(approved=1),record_id INTEGER NOT NULL UNIQUE);
+CREATE TABLE catalog_policy_current(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision TEXT NOT NULL UNIQUE REFERENCES initial_policy(revision));
+CREATE TRIGGER initial_policy_no_update BEFORE UPDATE ON initial_policy BEGIN SELECT RAISE(ABORT,'initial policy is immutable'); END;
+CREATE TRIGGER initial_policy_no_delete BEFORE DELETE ON initial_policy BEGIN SELECT RAISE(ABORT,'initial policy is immutable'); END`
 
 func (l *Lifecycle) migrateV2(ctx context.Context) error {
 	c, err := l.db.Conn(ctx)
@@ -222,6 +237,90 @@ func (l *Lifecycle) Save(ctx context.Context, key, result string, p domain.Prove
 	}
 	committed = true
 	return result, nil
+}
+
+func (l *Lifecycle) SaveCatalog(ctx context.Context, key string, write domain.CatalogWrite) (string, error) {
+	if l == nil || l.db == nil || key == "" || key != write.Provenance.IdempotencyKey || write.Request == "" || write.Result == "" || write.Provenance.Validate() != nil || len(write.Entries) == 0 || len(write.Entries) != len(write.Imports) || write.Policy.Revision == "" || write.Policy.Mode == "" || !write.Policy.Approved {
+		return "", domain.ErrLifecycle
+	}
+	for i := range write.Entries {
+		entry, imported := write.Entries[i], write.Imports[i]
+		if entry.Path == "" || entry.Purpose == "" || entry.Audience == "" || entry.Owner == "" || len(entry.RelatedAreas) == 0 || entry.State == "" || entry.Evidence == "" || imported.Path != entry.Path || imported.Digest == "" || imported.Provenance.Validate() != nil || imported.Provenance.IdempotencyKey != key {
+			return "", domain.ErrLifecycle
+		}
+	}
+	c, err := l.db.Conn(ctx)
+	if err != nil {
+		return "", domain.ErrLifecycle
+	}
+	defer c.Close()
+	if _, err = c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	digest := sha256.Sum256([]byte(write.Request))
+	id := "catalog-v3:" + hex.EncodeToString(digest[:])
+	var storedID, storedResult, replayState string
+	var recordID sql.NullInt64
+	err = c.QueryRowContext(ctx, `SELECT identity,result,record_id,replay_state FROM idempotency WHERE key=?`, key).Scan(&storedID, &storedResult, &recordID, &replayState)
+	if err == nil {
+		if replayState == string(domain.IdempotencyLegacyUnavailable) {
+			return "", domain.ErrLegacyIdempotencyReplayUnavailable
+		}
+		if !recordID.Valid || storedID != id {
+			return "", domain.ErrIdempotencyConflict
+		}
+		if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
+			return "", domain.ErrLifecycle
+		}
+		committed = true
+		return storedResult, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", domain.ErrLifecycle
+	}
+	r, err := c.ExecContext(ctx, `INSERT INTO lifecycle_records(state) VALUES(?)`, write.Result)
+	if err != nil {
+		return "", domain.ErrLifecycle
+	}
+	newRecordID, err := r.LastInsertId()
+	if err != nil {
+		return "", domain.ErrLifecycle
+	}
+	p := write.Provenance
+	if _, err = c.ExecContext(ctx, `INSERT INTO provenance VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, newRecordID, p.Authority, p.DeclaredActor, p.Interaction, p.Context, p.Operation, p.Request, p.IdempotencyKey, p.Time, p.Approval, p.Evidence, p.Input, p.Result, p.Versions); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	if _, err = c.ExecContext(ctx, `INSERT INTO idempotency VALUES(?,?,?,?,?,?)`, key, write.Request, id, write.Result, newRecordID, domain.IdempotencyAvailable); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	for i, entry := range write.Entries {
+		related, _ := json.Marshal(entry.RelatedAreas)
+		pending, _ := json.Marshal(entry.PendingActions)
+		if _, err = c.ExecContext(ctx, `INSERT INTO catalog_entries VALUES(?,?,?,?,?,?,?,?,?,?)`, entry.Path, entry.Purpose, entry.Audience, entry.Owner, related, entry.State, entry.Evidence, entry.LastVerification, pending, newRecordID); err != nil {
+			return "", domain.ErrLifecycle
+		}
+		imported, ip := write.Imports[i], write.Imports[i].Provenance
+		if _, err = c.ExecContext(ctx, `INSERT INTO catalog_imports VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, newRecordID, imported.Path, imported.Digest, ip.Authority, ip.DeclaredActor, ip.Interaction, ip.Context, ip.Operation, ip.Request, ip.IdempotencyKey, ip.Time, ip.Approval, ip.Evidence, ip.Input, ip.Result, ip.Versions); err != nil {
+			return "", domain.ErrLifecycle
+		}
+	}
+	if _, err = c.ExecContext(ctx, `INSERT INTO initial_policy VALUES(?,?,?,?)`, write.Policy.Revision, write.Policy.Mode, write.Policy.Approved, newRecordID); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	if _, err = c.ExecContext(ctx, `INSERT INTO catalog_policy_current VALUES(1,?)`, write.Policy.Revision); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	committed = true
+	return write.Result, nil
 }
 func (l *Lifecycle) Provenance(ctx context.Context, key string) (p domain.Provenance, err error) {
 	err = l.db.QueryRowContext(ctx, `SELECT provenance.authority,provenance.actor,provenance.interaction,provenance.context,provenance.operation,provenance.request,provenance.idempotency_key,provenance.time,provenance.approval,provenance.evidence,provenance.input,provenance.result,provenance.versions FROM provenance JOIN idempotency ON provenance.record_id=idempotency.record_id WHERE key=?`, key).Scan(&p.Authority, &p.DeclaredActor, &p.Interaction, &p.Context, &p.Operation, &p.Request, &p.IdempotencyKey, &p.Time, &p.Approval, &p.Evidence, &p.Input, &p.Result, &p.Versions)
