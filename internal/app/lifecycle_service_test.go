@@ -128,7 +128,7 @@ func TestCatalogServiceImportsApprovedInPlaceDocumentsWithLocalProvenance(t *tes
 	}
 	want := domain.CatalogEntry{
 		Path: "docs/guide.md", Purpose: "existing_documentation", Audience: "contributors", Owner: "docs-team", RelatedAreas: []string{"docs"},
-		State: domain.CatalogImported, Evidence: "tracked",
+		State: domain.CatalogImported, Evidence: "tracked", Digest: "sha256:guide",
 	}
 	if !reflect.DeepEqual(result.Entries, []domain.CatalogEntry{want}) {
 		t.Fatalf("entries = %#v", result.Entries)
@@ -138,6 +138,65 @@ func TestCatalogServiceImportsApprovedInPlaceDocumentsWithLocalProvenance(t *tes
 	}
 	if result.Entries[0].LastVerification != "" {
 		t.Fatalf("last verification = %q", result.Entries[0].LastVerification)
+	}
+}
+
+type auditDouble struct {
+	resolve, radiograph, load, save int
+	evidence                        domain.Evidence
+	report                          gitadapter.Radiography
+	entries                         []domain.CatalogEntry
+	err                             error
+	write                           domain.CatalogAuditWrite
+}
+
+func (d *auditDouble) Resolve(context.Context, string, domain.Scope) (domain.Evidence, error) {
+	d.resolve++
+	return d.evidence, d.err
+}
+func (d *auditDouble) Radiograph(context.Context, string) (gitadapter.Radiography, error) {
+	d.radiograph++
+	return d.report, d.err
+}
+func (d *auditDouble) LoadCatalog(context.Context) ([]domain.CatalogEntry, error) {
+	d.load++
+	return append([]domain.CatalogEntry(nil), d.entries...), nil
+}
+func (d *auditDouble) SaveAudit(_ context.Context, _ string, write domain.CatalogAuditWrite) (string, error) {
+	d.save++
+	d.write = write
+	return write.Result, nil
+}
+
+func TestCatalogAuditsUseDistinctEvidencePathsAndPersistLoadedCatalog(t *testing.T) {
+	entries := []domain.CatalogEntry{{Path: "docs/changed.md", Digest: "sha256:old", State: domain.CatalogActive}, {Path: "docs/same.md", Digest: "sha256:same", State: domain.CatalogActive}, {Path: "docs/missing.md", State: domain.CatalogActive}, {Path: "docs/ambiguous.md", State: domain.CatalogActive}, {Path: "docs/related.md", RelatedAreas: []string{"src/related"}, State: domain.CatalogActive}, {Path: "docs/quiet.md", State: domain.CatalogActive}}
+	d := &auditDouble{entries: entries, evidence: domain.Evidence{Identity: "change-evidence", ChangedPaths: []string{"docs/changed.md", "docs/same.md", "docs/missing.md", "docs/ambiguous.md", "src/related/code.go"}, DocumentationDigests: map[string]string{"docs/changed.md": "sha256:new", "docs/same.md": "sha256:same", "docs/missing.md": "missing"}}}
+	service := CatalogService{Resolver: d, Radiographer: d, AuditStore: d, Clock: fixedPlanningClock}
+	request := CatalogAuditRequest{Repository: "/repo", Scope: domain.Scope{Kind: domain.ScopeWorktree}, Actor: "actor", Interaction: "app:audit", Request: "request", IdempotencyKey: "change-key"}
+	got, err := service.AuditChange(context.Background(), request)
+	if err != nil || d.resolve != 1 || d.radiograph != 0 || d.load != 1 || d.save != 1 || len(d.write.Actions) != 1 || d.write.Actions[0].State != domain.PendingOpen || d.write.Actions[0].AuditID != d.write.Audits[2].ID {
+		t.Fatalf("change orchestration = %#v, %v, calls %d/%d/%d/%d", got, err, d.resolve, d.radiograph, d.load, d.save)
+	}
+	want := []domain.AuditResult{domain.AuditUpdate, domain.AuditNoAction, domain.AuditOrphan, domain.AuditReview, domain.AuditUpdate, domain.AuditNoAction}
+	wantState := []domain.CatalogState{domain.CatalogStale, domain.CatalogActive, domain.CatalogOrphan, domain.CatalogUncertain, domain.CatalogStale, domain.CatalogActive}
+	for i := range want {
+		if got.Assessments[i].Entry.Path != entries[i].Path || got.Assessments[i].Audit.Result != want[i] || got.Assessments[i].Entry.State != wantState[i] {
+			t.Fatalf("assessment %d = %#v", i, got.Assessments[i])
+		}
+	}
+	d.resolve, d.radiograph, d.load, d.save = 0, 0, 0, 0
+	d.entries = []domain.CatalogEntry{{Path: "docs/current.md", Digest: "sha256:same", State: domain.CatalogActive}}
+	d.report = gitadapter.Radiography{Identity: "radiography-evidence", Documentation: []gitadapter.DocumentationEvidence{{Path: "docs/current.md", Digest: "sha256:same", Classification: "active"}}, Findings: []gitadapter.Finding{{Conflicts: []gitadapter.Conflict{{Evidence: []gitadapter.RepositoryEvidence{{Path: "docs/current.md"}}}}}}}
+	request.Scope, request.IdempotencyKey = domain.Scope{}, "ondemand-key"
+	got, err = service.AuditOnDemand(context.Background(), request)
+	if err != nil || d.radiograph != 1 || d.resolve != 0 || got.Assessments[0].Audit.Result != domain.AuditConflict {
+		t.Fatalf("on-demand orchestration = %#v, %v, calls %d/%d", got, err, d.resolve, d.radiograph)
+	}
+
+	d.err, d.load = errors.New("resolver failed"), 0
+	request.Scope = domain.Scope{Kind: domain.ScopeWorktree}
+	if _, err := service.AuditChange(context.Background(), request); err == nil || d.load != 0 {
+		t.Fatalf("resolver failure = %v, loads %d", err, d.load)
 	}
 }
 

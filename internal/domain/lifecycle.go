@@ -134,6 +134,7 @@ const (
 
 type CatalogEntry struct {
 	Path, Purpose, Audience, Owner, Evidence string
+	Digest                                   string
 	RelatedAreas                             []string
 	State                                    CatalogState
 	LastVerification                         string
@@ -154,14 +155,23 @@ type CatalogWrite struct {
 	Imports         []CatalogImport
 	Policy          InitialPolicy
 }
+type CatalogAuditWrite struct {
+	Request, Result string
+	Provenance      Provenance
+	Entries         []CatalogEntry
+	Audits          []Audit
+	Actions         []PendingAction
+}
 type Audit struct {
-	State               AuditState
-	Result              AuditResult
-	Evidence, Rationale string
+	ID, Trigger, Path, Scope string
+	State                    AuditState
+	Result                   AuditResult
+	Evidence, Rationale      string
 }
 type PendingAction struct {
-	State    PendingActionState
-	Evidence string
+	ID, Path, AuditID string
+	State             PendingActionState
+	Evidence          string
 }
 type Verification struct {
 	State    VerificationState

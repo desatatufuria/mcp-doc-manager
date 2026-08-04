@@ -77,7 +77,12 @@ func (l *Lifecycle) migrate(ctx context.Context) error {
 		version = 2
 	}
 	if version < 3 {
-		return l.migrateOne(ctx, 3, v3Schema)
+		if err := l.migrateOne(ctx, 3, v3Schema); err != nil {
+			return err
+		}
+	}
+	if version < 4 {
+		return l.migrateOne(ctx, 4, v4Schema)
 	}
 	return nil
 }
@@ -90,6 +95,10 @@ CREATE TABLE initial_policy(revision TEXT PRIMARY KEY,mode TEXT NOT NULL,approve
 CREATE TABLE catalog_policy_current(singleton INTEGER PRIMARY KEY CHECK(singleton=1),revision TEXT NOT NULL UNIQUE REFERENCES initial_policy(revision));
 CREATE TRIGGER initial_policy_no_update BEFORE UPDATE ON initial_policy BEGIN SELECT RAISE(ABORT,'initial policy is immutable'); END;
 CREATE TRIGGER initial_policy_no_delete BEFORE DELETE ON initial_policy BEGIN SELECT RAISE(ABORT,'initial policy is immutable'); END`
+const v4Schema = `ALTER TABLE catalog_entries ADD COLUMN digest TEXT NOT NULL DEFAULT '';
+UPDATE catalog_entries SET digest=(SELECT digest FROM catalog_imports WHERE catalog_imports.record_id=catalog_entries.record_id AND catalog_imports.path=catalog_entries.path) WHERE digest='' AND EXISTS(SELECT 1 FROM catalog_imports WHERE catalog_imports.record_id=catalog_entries.record_id AND catalog_imports.path=catalog_entries.path);
+CREATE TABLE catalog_audits(id TEXT PRIMARY KEY,record_id INTEGER NOT NULL,trigger TEXT NOT NULL CHECK(trigger IN ('change','on_demand')),path TEXT NOT NULL,scope TEXT NOT NULL,evidence TEXT NOT NULL,result TEXT NOT NULL,rationale TEXT NOT NULL);
+CREATE TABLE orphan_actions(id TEXT PRIMARY KEY,path TEXT NOT NULL,audit_id TEXT NOT NULL,evidence TEXT NOT NULL,state TEXT NOT NULL CHECK(state='open'),UNIQUE(path,evidence,state))`
 
 func (l *Lifecycle) migrateV2(ctx context.Context) error {
 	c, err := l.db.Conn(ctx)
@@ -302,7 +311,7 @@ func (l *Lifecycle) SaveCatalog(ctx context.Context, key string, write domain.Ca
 	for i, entry := range write.Entries {
 		related, _ := json.Marshal(entry.RelatedAreas)
 		pending, _ := json.Marshal(entry.PendingActions)
-		if _, err = c.ExecContext(ctx, `INSERT INTO catalog_entries VALUES(?,?,?,?,?,?,?,?,?,?)`, entry.Path, entry.Purpose, entry.Audience, entry.Owner, related, entry.State, entry.Evidence, entry.LastVerification, pending, newRecordID); err != nil {
+		if _, err = c.ExecContext(ctx, `INSERT INTO catalog_entries(path,purpose,audience,owner,related_areas,state,evidence,last_verification,pending_actions,record_id,digest) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, entry.Path, entry.Purpose, entry.Audience, entry.Owner, related, entry.State, entry.Evidence, entry.LastVerification, pending, newRecordID, entry.Digest); err != nil {
 			return "", domain.ErrLifecycle
 		}
 		imported, ip := write.Imports[i], write.Imports[i].Provenance
@@ -315,6 +324,103 @@ func (l *Lifecycle) SaveCatalog(ctx context.Context, key string, write domain.Ca
 	}
 	if _, err = c.ExecContext(ctx, `INSERT INTO catalog_policy_current VALUES(1,?)`, write.Policy.Revision); err != nil {
 		return "", domain.ErrLifecycle
+	}
+	if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	committed = true
+	return write.Result, nil
+}
+
+func (l *Lifecycle) LoadCatalog(ctx context.Context) ([]domain.CatalogEntry, error) {
+	rows, err := l.db.QueryContext(ctx, `SELECT path,purpose,audience,owner,related_areas,state,evidence,last_verification,pending_actions,digest FROM catalog_entries ORDER BY path`)
+	if err != nil {
+		return nil, domain.ErrLifecycle
+	}
+	defer rows.Close()
+	var entries []domain.CatalogEntry
+	for rows.Next() {
+		var entry domain.CatalogEntry
+		var related, pending []byte
+		if rows.Scan(&entry.Path, &entry.Purpose, &entry.Audience, &entry.Owner, &related, &entry.State, &entry.Evidence, &entry.LastVerification, &pending, &entry.Digest) != nil || json.Unmarshal(related, &entry.RelatedAreas) != nil || json.Unmarshal(pending, &entry.PendingActions) != nil {
+			return nil, domain.ErrLifecycle
+		}
+		entries = append(entries, entry)
+	}
+	if rows.Err() != nil || len(entries) == 0 {
+		return nil, domain.ErrLifecycle
+	}
+	return entries, nil
+}
+
+func (l *Lifecycle) SaveAudit(ctx context.Context, key string, write domain.CatalogAuditWrite) (string, error) {
+	if l == nil || l.db == nil || key == "" || key != write.Provenance.IdempotencyKey || write.Request == "" || write.Result == "" || write.Provenance.Validate() != nil || len(write.Entries) == 0 || len(write.Audits) != len(write.Entries) {
+		return "", domain.ErrLifecycle
+	}
+	c, err := l.db.Conn(ctx)
+	if err != nil {
+		return "", domain.ErrLifecycle
+	}
+	defer c.Close()
+	if _, err = c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	digest := sha256.Sum256([]byte(write.Request))
+	id := "catalog-audit-v4:" + hex.EncodeToString(digest[:])
+	var storedID, storedResult, replayState string
+	var recordID sql.NullInt64
+	err = c.QueryRowContext(ctx, `SELECT identity,result,record_id,replay_state FROM idempotency WHERE key=?`, key).Scan(&storedID, &storedResult, &recordID, &replayState)
+	if err == nil {
+		if replayState == string(domain.IdempotencyLegacyUnavailable) {
+			return "", domain.ErrLegacyIdempotencyReplayUnavailable
+		}
+		if !recordID.Valid || storedID != id {
+			return "", domain.ErrIdempotencyConflict
+		}
+		if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
+			return "", domain.ErrLifecycle
+		}
+		committed = true
+		return storedResult, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", domain.ErrLifecycle
+	}
+	r, err := c.ExecContext(ctx, `INSERT INTO lifecycle_records(state) VALUES(?)`, write.Result)
+	if err != nil {
+		return "", domain.ErrLifecycle
+	}
+	newRecordID, err := r.LastInsertId()
+	if err != nil {
+		return "", domain.ErrLifecycle
+	}
+	p := write.Provenance
+	if _, err = c.ExecContext(ctx, `INSERT INTO provenance VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, newRecordID, p.Authority, p.DeclaredActor, p.Interaction, p.Context, p.Operation, p.Request, p.IdempotencyKey, p.Time, p.Approval, p.Evidence, p.Input, p.Result, p.Versions); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	if _, err = c.ExecContext(ctx, `INSERT INTO idempotency VALUES(?,?,?,?,?,?)`, key, write.Request, id, write.Result, newRecordID, domain.IdempotencyAvailable); err != nil {
+		return "", domain.ErrLifecycle
+	}
+	for i, entry := range write.Entries {
+		pending, _ := json.Marshal(entry.PendingActions)
+		if _, err = c.ExecContext(ctx, `UPDATE catalog_entries SET state=?,pending_actions=?,record_id=?,digest=? WHERE path=?`, entry.State, pending, newRecordID, entry.Digest, entry.Path); err != nil {
+			return "", domain.ErrLifecycle
+		}
+		audit := write.Audits[i]
+		if _, err = c.ExecContext(ctx, `INSERT INTO catalog_audits VALUES(?,?,?,?,?,?,?,?)`, audit.ID, newRecordID, audit.Trigger, audit.Path, audit.Scope, audit.Evidence, audit.Result, audit.Rationale); err != nil {
+			return "", domain.ErrLifecycle
+		}
+	}
+	for _, action := range write.Actions {
+		if _, err = c.ExecContext(ctx, `INSERT OR IGNORE INTO orphan_actions VALUES(?,?,?,?,?)`, action.ID, action.Path, action.AuditID, action.Evidence, action.State); err != nil {
+			return "", domain.ErrLifecycle
+		}
 	}
 	if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", domain.ErrLifecycle
