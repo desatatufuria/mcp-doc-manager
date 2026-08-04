@@ -1,0 +1,533 @@
+package app
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"strings"
+	"time"
+
+	gitadapter "github.com/desatatufuria/mcp-doc-manager/internal/adapters/git"
+	"github.com/desatatufuria/mcp-doc-manager/internal/domain"
+)
+
+var (
+	ErrPlanningDenied          = errors.New("planning_denied")
+	ErrCatalogEvidenceRequired = errors.New("catalog_evidence_required")
+)
+
+type LifecyclePolicy string
+
+const (
+	ApprovalRequired           LifecyclePolicy = "approval-required"
+	AutomaticAfterApprovedPlan LifecyclePolicy = "automatic-after-approved-plan"
+)
+
+type RadiographyService interface {
+	Radiograph(context.Context, string) (gitadapter.Radiography, error)
+}
+
+type PlanningRequest struct {
+	Repository, VisibleStorage, Audience, Language, Owner  string
+	Actor, Interaction, Request, IdempotencyKey            string
+	Confirmed, PlanApproved, BatchApproved, PolicyApproved bool
+	Policy                                                 LifecyclePolicy
+	Actions                                                []domain.PlannedAction
+}
+
+type Plan struct {
+	State                                                            domain.LifecycleState
+	Revision, Radiography, VisibleStorage, Audience, Language, Owner string
+	ExistingDocuments                                                []ExistingDocumentTreatment
+	Actions                                                          []domain.PlannedAction
+}
+
+type ExistingDocumentTreatment struct {
+	Path      string
+	Treatment ExistingDocumentTreatmentKind
+}
+
+type ExistingDocumentTreatmentKind string
+
+const InPlaceInventory ExistingDocumentTreatmentKind = "in_place_inventory"
+
+type Batch struct {
+	ID      string
+	State   domain.LifecycleState
+	Actions []domain.PlannedAction
+}
+
+type Policy struct {
+	Mode     LifecyclePolicy
+	Revision string
+	Approved bool
+}
+
+type PlanningResult struct {
+	Radiography   gitadapter.Radiography
+	Plan          Plan
+	Batch         Batch
+	Policy        Policy
+	Authorization *domain.Authorization
+	Provenance    domain.Provenance
+	Err           error
+}
+
+type PlanningService struct {
+	Radiography RadiographyService
+	Clock       func() time.Time
+}
+
+func (s PlanningService) Plan(ctx context.Context, request PlanningRequest) PlanningResult {
+	if s.Radiography == nil || !request.Confirmed || !completeContext(request) || !validPolicy(request.Policy) || !validActions(request.Actions) {
+		return PlanningResult{Err: ErrPlanningDenied}
+	}
+	radiography, err := s.Radiography.Radiograph(ctx, request.Repository)
+	if err != nil {
+		return PlanningResult{Err: err}
+	}
+	if radiography.Identity == "" || radiography.Root == "" {
+		return PlanningResult{Radiography: radiography, Err: ErrPlanningDenied}
+	}
+	plan := Plan{
+		State:             domain.PlanProposed,
+		Revision:          radiography.Identity,
+		Radiography:       radiography.Identity,
+		VisibleStorage:    request.VisibleStorage,
+		Audience:          request.Audience,
+		Language:          request.Language,
+		Owner:             request.Owner,
+		ExistingDocuments: existingDocuments(radiography),
+		Actions:           append([]domain.PlannedAction(nil), request.Actions...),
+	}
+	policy := Policy{Mode: request.Policy, Revision: string(request.Policy), Approved: request.PolicyApproved}
+	batch := Batch{ID: "batch:" + radiography.Identity, State: domain.BatchProposed, Actions: append([]domain.PlannedAction(nil), request.Actions...)}
+	result := PlanningResult{Radiography: radiography, Plan: plan, Batch: batch, Policy: policy}
+	if !request.PlanApproved || !request.PolicyApproved || !batchApproved(request) {
+		result.Err = ErrPlanningDenied
+		return result
+	}
+	result.Plan.State = domain.PlanApproved
+	result.Batch.State = domain.BatchAuthorized
+	result.Authorization = &domain.Authorization{
+		BatchID: batch.ID, PlanRevision: plan.Revision, PolicyRevision: policy.Revision,
+		Scope: domain.Scope{Kind: domain.ScopeWorktree}, Baseline: radiography.Identity, Evidence: radiography.Identity,
+		Allowed: append([]domain.PlannedAction(nil), request.Actions...), Active: true,
+	}
+	result.Provenance = planningProvenance(request, result, s.now())
+	if err := result.Provenance.Validate(); err != nil {
+		result.Authorization = nil
+		result.Err = ErrPlanningDenied
+	}
+	return result
+}
+
+func completeContext(request PlanningRequest) bool {
+	return request.Repository != "" && request.VisibleStorage != "" && request.Audience != "" && request.Language != "" && request.Owner != ""
+}
+
+func validPolicy(policy LifecyclePolicy) bool {
+	return policy == ApprovalRequired || policy == AutomaticAfterApprovedPlan
+}
+
+func validActions(actions []domain.PlannedAction) bool {
+	for _, action := range actions {
+		if action.Path == "" || filepath.IsAbs(action.Path) || filepath.Clean(action.Path) != action.Path || strings.HasPrefix(action.Path, ".."+string(filepath.Separator)) {
+			return false
+		}
+		if action.Kind != domain.ActionCreate && action.Kind != domain.ActionUpdate && action.Kind != domain.ActionMove && action.Kind != domain.ActionDelete {
+			return false
+		}
+	}
+	return true
+}
+
+func batchApproved(request PlanningRequest) bool {
+	for _, action := range request.Actions {
+		if action.Structural || action.Kind == domain.ActionMove || action.Kind == domain.ActionDelete {
+			return request.BatchApproved
+		}
+	}
+	return request.Policy == AutomaticAfterApprovedPlan || request.BatchApproved
+}
+
+func existingDocuments(radiography gitadapter.Radiography) []ExistingDocumentTreatment {
+	paths := make([]ExistingDocumentTreatment, 0, len(radiography.Documentation))
+	for _, document := range radiography.Documentation {
+		paths = append(paths, ExistingDocumentTreatment{Path: document.Path, Treatment: InPlaceInventory})
+	}
+	return paths
+}
+
+func (s PlanningService) now() time.Time {
+	if s.Clock != nil {
+		return s.Clock()
+	}
+	return time.Now().UTC()
+}
+
+func planningProvenance(request PlanningRequest, result PlanningResult, now time.Time) domain.Provenance {
+	return domain.Provenance{
+		Authority: domain.DeclaredLocalProvenance, DeclaredActor: request.Actor, Interaction: request.Interaction,
+		Context: result.Radiography.Root, Operation: "plan", Request: request.Request, IdempotencyKey: request.IdempotencyKey,
+		Time: now.Format(time.RFC3339Nano), Approval: "approved", Evidence: result.Radiography.Identity,
+		Input: result.Plan.Revision, Result: result.Batch.ID, Versions: result.Plan.Revision + "/" + result.Policy.Revision,
+	}
+}
+
+type CatalogImportRequest struct {
+	Plan                                                  Plan
+	Policy                                                Policy
+	Documents                                             []CatalogDocumentImport
+	Actor, Interaction, Request, IdempotencyKey, Evidence string
+}
+
+type CatalogDocumentImport struct{ Path, Evidence, Digest string }
+
+type CatalogImportResult struct {
+	Entries    []domain.CatalogEntry
+	Provenance []domain.Provenance
+	Err        error
+}
+
+type CatalogAssessment struct {
+	Entry                                   domain.CatalogEntry
+	Evidence, Rationale                     string
+	Related, Uncertain, Orphan, Conflicting bool
+}
+
+type CatalogAssessmentResult struct {
+	Entry domain.CatalogEntry
+	Audit domain.Audit
+	Err   error
+}
+
+type CatalogVerificationRequest struct {
+	Authorization domain.Authorization
+	Current       domain.Authorization
+	Entry         domain.CatalogEntry
+	Action        domain.PlannedAction
+	Evidence      string
+}
+
+type CatalogVerificationResult struct {
+	Entry        domain.CatalogEntry
+	Verification domain.Verification
+	Err          error
+}
+
+type CatalogStore interface {
+	Save(context.Context, string, string, domain.Provenance) (string, error)
+}
+
+type DurableCatalogStore interface {
+	SaveCatalog(context.Context, string, domain.CatalogWrite) (string, error)
+}
+
+type CatalogAuditStore interface {
+	LoadCatalog(context.Context) ([]domain.CatalogEntry, error)
+	SaveAudit(context.Context, string, domain.CatalogAuditWrite) (string, error)
+}
+
+type CatalogAuditRequest struct {
+	Repository, Actor, Interaction, Request, IdempotencyKey string
+	Scope                                                   domain.Scope
+}
+type CatalogAuditResult struct{ Assessments []CatalogAssessmentResult }
+
+type CatalogRecord struct {
+	Import       *CatalogImportResult
+	Assessment   *CatalogAssessmentResult
+	Verification *CatalogVerificationResult
+}
+
+func PersistCatalog(ctx context.Context, store CatalogStore, key string, provenance domain.Provenance, record CatalogRecord) (CatalogRecord, error) {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return CatalogRecord{}, err
+	}
+	stored, err := store.Save(ctx, key, string(payload), provenance)
+	if err != nil {
+		return CatalogRecord{}, err
+	}
+	if err := json.Unmarshal([]byte(stored), &record); err != nil {
+		return CatalogRecord{}, err
+	}
+	return record, nil
+}
+
+func (s CatalogService) ImportAndPersist(ctx context.Context, store DurableCatalogStore, request CatalogImportRequest) (CatalogImportResult, error) {
+	if !request.Policy.Approved || !validPolicy(request.Policy.Mode) || len(request.Documents) != len(request.Plan.ExistingDocuments) {
+		return CatalogImportResult{Err: ErrCatalogEvidenceRequired}, ErrCatalogEvidenceRequired
+	}
+	result := s.Import(request)
+	if result.Err != nil {
+		return result, result.Err
+	}
+	record := CatalogRecord{Import: &result}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return CatalogImportResult{}, err
+	}
+	canonical, err := json.Marshal(request)
+	if err != nil {
+		return CatalogImportResult{}, err
+	}
+	imports := make([]domain.CatalogImport, len(request.Documents))
+	for i, document := range request.Documents {
+		imports[i] = domain.CatalogImport{Path: document.Path, Digest: document.Digest, Provenance: result.Provenance[i]}
+	}
+	policyRevision := "policy:" + request.Plan.Revision + ":" + request.Request
+	stored, err := store.SaveCatalog(ctx, request.IdempotencyKey, domain.CatalogWrite{
+		Request: string(canonical), Result: string(payload), Provenance: result.Provenance[0], Entries: result.Entries, Imports: imports,
+		Policy: domain.InitialPolicy{Revision: policyRevision, Mode: string(request.Policy.Mode), Approved: request.Policy.Approved},
+	})
+	if err != nil {
+		return CatalogImportResult{}, err
+	}
+	if err := json.Unmarshal([]byte(stored), &record); err != nil || record.Import == nil {
+		return CatalogImportResult{}, domain.ErrLifecycle
+	}
+	return *record.Import, nil
+}
+
+// CatalogService derives in-memory catalog evidence; it never writes visible documents.
+type CatalogService struct {
+	Clock        func() time.Time
+	Resolver     EvidenceResolver
+	Radiographer RadiographyService
+	AuditStore   CatalogAuditStore
+}
+
+func (s CatalogService) Import(request CatalogImportRequest) CatalogImportResult {
+	if request.Plan.State != domain.PlanApproved || !completeCatalogPlan(request.Plan) || request.Evidence == "" || request.Actor == "" || request.Interaction == "" || request.Request == "" || request.IdempotencyKey == "" {
+		return CatalogImportResult{Err: ErrCatalogEvidenceRequired}
+	}
+	result := CatalogImportResult{}
+	seen := map[string]bool{}
+	for i, document := range request.Plan.ExistingDocuments {
+		evidence := request.Evidence
+		if len(request.Documents) > 0 {
+			if i >= len(request.Documents) || request.Documents[i].Path != document.Path || request.Documents[i].Evidence == "" || request.Documents[i].Digest == "" {
+				return CatalogImportResult{Err: ErrCatalogEvidenceRequired}
+			}
+			evidence = request.Documents[i].Evidence
+		}
+		if document.Path == "" || document.Treatment != InPlaceInventory || seen[document.Path] {
+			return CatalogImportResult{Err: ErrCatalogEvidenceRequired}
+		}
+		seen[document.Path] = true
+		entry := domain.CatalogEntry{
+			Path: document.Path, Purpose: "existing_documentation", Audience: request.Plan.Audience, Owner: request.Plan.Owner,
+			RelatedAreas: []string{request.Plan.VisibleStorage}, State: domain.CatalogImported, Evidence: evidence,
+		}
+		if len(request.Documents) > 0 {
+			entry.Digest = request.Documents[i].Digest
+		}
+		result.Entries = append(result.Entries, entry)
+		result.Provenance = append(result.Provenance, domain.Provenance{
+			Authority: domain.DeclaredLocalProvenance, DeclaredActor: request.Actor, Interaction: request.Interaction,
+			Context: request.Plan.Revision, Operation: "catalog_import", Request: request.Request, IdempotencyKey: request.IdempotencyKey,
+			Time: s.now().Format(time.RFC3339Nano), Approval: "approved", Evidence: evidence,
+			Input: document.Path, Result: string(domain.CatalogImported), Versions: request.Plan.Revision,
+		})
+	}
+	return result
+}
+
+func (s CatalogService) AuditChange(ctx context.Context, request CatalogAuditRequest) (CatalogAuditResult, error) {
+	if s.Resolver == nil || request.Scope.Validate() != nil {
+		return CatalogAuditResult{}, domain.ErrUnsupportedRequest
+	}
+	evidence, err := s.Resolver.Resolve(ctx, request.Repository, request.Scope)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	return s.audit(ctx, request, "change", evidence.Identity, func(entry domain.CatalogEntry) (domain.AuditResult, string) {
+		for _, changed := range evidence.ChangedPaths {
+			if changed == entry.Path {
+				digest, ok := evidence.DocumentationDigests[entry.Path]
+				if !ok {
+					return domain.AuditReview, "changed document evidence is incomplete"
+				}
+				if digest == "missing" {
+					return domain.AuditOrphan, "scoped evidence proves the document is missing"
+				}
+				if digest == entry.Digest {
+					return domain.AuditNoAction, "resolved document digest matches the catalog"
+				}
+				return domain.AuditUpdate, "catalog document changed in the resolved scope"
+			}
+			for _, area := range entry.RelatedAreas {
+				if changed == area || strings.HasPrefix(changed, strings.TrimSuffix(area, "/")+"/") {
+					return domain.AuditUpdate, "an explicitly related catalog area changed"
+				}
+			}
+		}
+		return domain.AuditNoAction, "resolved scope has no mapped catalog change"
+	})
+}
+
+func (s CatalogService) AuditOnDemand(ctx context.Context, request CatalogAuditRequest) (CatalogAuditResult, error) {
+	if s.Radiographer == nil || request.Scope != (domain.Scope{}) {
+		return CatalogAuditResult{}, domain.ErrUnsupportedRequest
+	}
+	report, err := s.Radiographer.Radiograph(ctx, request.Repository)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	documents := map[string]gitadapter.DocumentationEvidence{}
+	for _, document := range report.Documentation {
+		documents[document.Path] = document
+	}
+	return s.audit(ctx, request, "on_demand", report.Identity, func(entry domain.CatalogEntry) (domain.AuditResult, string) {
+		document, ok := documents[entry.Path]
+		if !ok {
+			return domain.AuditOrphan, "current radiography proves the document is missing"
+		}
+		if radiographyConflicts(entry, report) {
+			return domain.AuditConflict, "current radiography contains conflicting mapped evidence"
+		}
+		if document.Digest == "" {
+			return domain.AuditReview, "current document evidence is incomplete"
+		}
+		if entry.Digest != "" && document.Digest != entry.Digest {
+			return domain.AuditUpdate, "current document digest differs from the catalog"
+		}
+		if document.Classification == "uncertain" || report.Ownership.Uncertain {
+			return domain.AuditReview, "current radiography remains uncertain"
+		}
+		return domain.AuditNoAction, "current radiography maps no catalog change"
+	})
+}
+
+func (s CatalogService) audit(ctx context.Context, request CatalogAuditRequest, trigger, evidence string, assess func(domain.CatalogEntry) (domain.AuditResult, string)) (CatalogAuditResult, error) {
+	if s.AuditStore == nil || request.Repository == "" || request.Actor == "" || request.Interaction == "" || request.Request == "" || request.IdempotencyKey == "" || evidence == "" {
+		return CatalogAuditResult{}, ErrCatalogEvidenceRequired
+	}
+	entries, err := s.AuditStore.LoadCatalog(ctx)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	scope, _ := json.Marshal(request.Scope)
+	result := CatalogAuditResult{Assessments: make([]CatalogAssessmentResult, len(entries))}
+	write := domain.CatalogAuditWrite{Entries: entries}
+	for i := range entries {
+		kind, rationale := assess(entries[i])
+		audit := domain.Audit{ID: stableID("audit", trigger, request.IdempotencyKey, entries[i].Path, evidence), Trigger: trigger, Path: entries[i].Path, Scope: string(scope), Evidence: evidence, Rationale: rationale, State: domain.AuditReported, Result: kind}
+		switch kind {
+		case domain.AuditUpdate:
+			write.Entries[i].State = domain.CatalogStale
+		case domain.AuditReview, domain.AuditConflict:
+			write.Entries[i].State = domain.CatalogUncertain
+		case domain.AuditOrphan:
+			write.Entries[i].State = domain.CatalogOrphan
+			action := domain.PendingAction{ID: stableID("orphan", entries[i].Path, evidence), Path: entries[i].Path, AuditID: audit.ID, Evidence: evidence, State: domain.PendingOpen}
+			for j, pending := range write.Entries[i].PendingActions {
+				if pending.ID == action.ID && pending.State == domain.PendingOpen {
+					action = pending
+					write.Entries[i].PendingActions[j], write.Entries[i].PendingActions[len(write.Entries[i].PendingActions)-1] = write.Entries[i].PendingActions[len(write.Entries[i].PendingActions)-1], pending
+					break
+				}
+			}
+			write.Actions = append(write.Actions, action)
+			if len(write.Entries[i].PendingActions) == 0 || write.Entries[i].PendingActions[len(write.Entries[i].PendingActions)-1].ID != action.ID {
+				write.Entries[i].PendingActions = append(write.Entries[i].PendingActions, action)
+			}
+		}
+		write.Audits = append(write.Audits, audit)
+		result.Assessments[i] = CatalogAssessmentResult{Entry: write.Entries[i], Audit: audit}
+	}
+	canonical, _ := json.Marshal([]string{trigger, request.Repository, request.Actor, request.Interaction, request.Request, evidence, string(scope)})
+	payload, _ := json.Marshal(result)
+	write.Request, write.Result = string(canonical), string(payload)
+	write.Provenance = domain.Provenance{Authority: domain.DeclaredLocalProvenance, DeclaredActor: request.Actor, Interaction: request.Interaction, Context: request.Repository, Operation: "catalog_audit", Request: request.Request, IdempotencyKey: request.IdempotencyKey, Time: s.now().Format(time.RFC3339Nano), Approval: "not_required", Evidence: evidence, Input: write.Request, Result: "reported", Versions: "catalog/v4"}
+	stored, err := s.AuditStore.SaveAudit(ctx, request.IdempotencyKey, write)
+	if err != nil {
+		return CatalogAuditResult{}, err
+	}
+	if json.Unmarshal([]byte(stored), &result) != nil {
+		return CatalogAuditResult{}, domain.ErrLifecycle
+	}
+	return result, nil
+}
+
+func stableID(parts ...string) string {
+	raw, _ := json.Marshal(parts)
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func radiographyConflicts(entry domain.CatalogEntry, report gitadapter.Radiography) bool {
+	for _, finding := range append(report.Findings, report.Context...) {
+		for _, conflict := range finding.Conflicts {
+			for _, evidence := range conflict.Evidence {
+				if evidence.Path == entry.Path {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func completeCatalogPlan(plan Plan) bool {
+	return plan.Revision != "" && plan.Audience != "" && plan.Owner != "" && plan.VisibleStorage != "" && len(plan.ExistingDocuments) > 0
+}
+
+func (s CatalogService) Assess(assessment CatalogAssessment) CatalogAssessmentResult {
+	if assessment.Entry.Path == "" || assessment.Evidence == "" || assessment.Rationale == "" {
+		return CatalogAssessmentResult{Err: ErrCatalogEvidenceRequired}
+	}
+	result := CatalogAssessmentResult{Entry: assessment.Entry, Audit: domain.Audit{State: domain.AuditReported, Evidence: assessment.Evidence, Rationale: assessment.Rationale}}
+	switch {
+	case assessment.Conflicting:
+		result.Entry.State, result.Audit.Result = domain.CatalogUncertain, domain.AuditConflict
+	case assessment.Orphan:
+		result.Entry.State, result.Audit.Result = domain.CatalogOrphan, domain.AuditOrphan
+		result.Entry.PendingActions = append(result.Entry.PendingActions, domain.PendingAction{State: domain.PendingOpen, Evidence: assessment.Evidence})
+	case assessment.Uncertain:
+		result.Entry.State, result.Audit.Result = domain.CatalogUncertain, domain.AuditReview
+	case assessment.Related:
+		result.Entry.State, result.Audit.Result = domain.CatalogStale, domain.AuditUpdate
+	default:
+		result.Audit.Result = domain.AuditNoAction
+	}
+	return result
+}
+
+// VerifyOutcome accepts only an active authorization whose full binding still matches.
+func (s CatalogService) VerifyOutcome(request CatalogVerificationRequest) CatalogVerificationResult {
+	result := CatalogVerificationResult{Entry: request.Entry, Verification: domain.Verification{State: domain.VerificationMismatch, Evidence: request.Evidence}}
+	if request.Authorization.Validate(request.Current) != nil || !allowedAction(request.Action, request.Current.Allowed) || request.Entry.Path != request.Action.Path {
+		result.Err = ErrCatalogEvidenceRequired
+		return result
+	}
+	if request.Evidence == "" || request.Evidence != request.Current.Evidence || request.Entry.Evidence != request.Current.Evidence {
+		result.Verification.State = domain.VerificationStale
+		result.Err = ErrCatalogEvidenceRequired
+		return result
+	}
+	result.Entry.LastVerification = s.now().Format(time.RFC3339Nano)
+	result.Verification = domain.Verification{State: domain.VerificationVerified, Evidence: request.Evidence}
+	return result
+}
+
+func allowedAction(action domain.PlannedAction, allowed []domain.PlannedAction) bool {
+	for _, candidate := range allowed {
+		if candidate == action {
+			return true
+		}
+	}
+	return false
+}
+
+func (s CatalogService) now() time.Time {
+	if s.Clock != nil {
+		return s.Clock()
+	}
+	return time.Now().UTC()
+}
