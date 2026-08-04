@@ -23,12 +23,39 @@ const maxOutput = 1 << 20
 
 type Resolver struct{ GitPath string }
 
+type rootBinding struct {
+	path string
+	info os.FileInfo
+}
+
+type rootBindingKey struct{}
+
 type Radiography struct {
 	Root          string
 	Identity      string
 	Documentation []DocumentationEvidence
 	Exclusions    []Exclusion
 	Ownership     OwnershipUncertainty
+	Findings      []Finding
+	Context       []Finding
+}
+
+type RepositoryEvidence struct{ Path, Signal string }
+type Candidate struct {
+	Value    string
+	Evidence []RepositoryEvidence
+}
+type Conflict struct {
+	Values   []string
+	Reason   string
+	Evidence []RepositoryEvidence
+}
+type Finding struct {
+	Area        string
+	Candidates  []Candidate
+	Absence     string
+	Conflicts   []Conflict
+	Uncertainty string
 }
 
 type DocumentationEvidence struct {
@@ -50,31 +77,52 @@ type OwnershipUncertainty struct {
 }
 
 func (r Resolver) ValidateRoot(ctx context.Context, root string) error {
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return domain.ErrOutsideRepository
+	_, err := r.repositoryRoot(ctx, root)
+	return err
+}
+
+func (r Resolver) repositoryRoot(ctx context.Context, root string) (rootBinding, error) {
+	if !filepath.IsAbs(root) || root != filepath.Clean(root) {
+		return rootBinding{}, domain.ErrOutsideRepository
 	}
+	absRoot := filepath.Clean(root)
+	physicalRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil || physicalRoot != absRoot {
+		return rootBinding{}, domain.ErrOutsideRepository
+	}
+	info, err := os.Lstat(absRoot)
+	if err != nil || !info.IsDir() {
+		return rootBinding{}, domain.ErrOutsideRepository
+	}
+	binding := rootBinding{path: physicalRoot, info: info}
 	git := r.GitPath
 	if git == "" {
 		git = "git"
 	}
-	top, err := r.run(ctx, git, absRoot, "rev-parse", "--show-toplevel")
+	top, err := r.run(withRootBinding(ctx, binding), git, physicalRoot, "rev-parse", "--show-toplevel")
 	if err != nil {
+		if errors.Is(err, domain.ErrOutsideRepository) {
+			return rootBinding{}, domain.ErrOutsideRepository
+		}
 		if errors.Is(err, domain.ErrOutputLimit) {
-			return domain.ErrOutputLimit
+			return rootBinding{}, domain.ErrOutputLimit
 		}
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return domain.ErrGitUnavailable
+			return rootBinding{}, domain.ErrGitUnavailable
 		}
-		if hasRepositoryChild(absRoot) {
-			return domain.ErrOutsideRepository
+		if hasRepositoryChild(physicalRoot) {
+			return rootBinding{}, domain.ErrOutsideRepository
 		}
-		return domain.ErrNotRepository
+		return rootBinding{}, domain.ErrNotRepository
 	}
-	if filepath.Clean(absRoot) != filepath.Clean(strings.TrimSpace(string(top))) {
-		return domain.ErrOutsideRepository
+	physicalTop, err := filepath.EvalSymlinks(filepath.Clean(strings.TrimSpace(string(top))))
+	if err != nil || physicalRoot != physicalTop {
+		return rootBinding{}, domain.ErrOutsideRepository
 	}
-	return nil
+	if err := sameRoot(binding); err != nil {
+		return rootBinding{}, err
+	}
+	return binding, nil
 }
 
 func (r Resolver) Resolve(ctx context.Context, root string, scope domain.Scope) (domain.Evidence, error) {
@@ -85,27 +133,12 @@ func (r Resolver) Resolve(ctx context.Context, root string, scope domain.Scope) 
 	if git == "" {
 		git = "git"
 	}
-	absRoot, err := filepath.Abs(root)
+	binding, err := r.repositoryRoot(ctx, root)
 	if err != nil {
-		return domain.Evidence{}, domain.ErrOutsideRepository
+		return domain.Evidence{}, err
 	}
-	top, err := r.run(ctx, git, absRoot, "rev-parse", "--show-toplevel")
-	if err != nil {
-		if errors.Is(err, domain.ErrOutputLimit) {
-			return domain.Evidence{}, domain.ErrOutputLimit
-		}
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return domain.Evidence{}, domain.ErrGitUnavailable
-		}
-		if hasRepositoryChild(absRoot) {
-			return domain.Evidence{}, domain.ErrOutsideRepository
-		}
-		return domain.Evidence{}, domain.ErrNotRepository
-	}
-	repoRoot := filepath.Clean(strings.TrimSpace(string(top)))
-	if filepath.Clean(absRoot) != repoRoot {
-		return domain.Evidence{}, domain.ErrOutsideRepository
-	}
+	ctx = withRootBinding(ctx, binding)
+	repoRoot := binding.path
 	resolvedScope := scope
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-prefix", "--name-only", "-z"}
 	var paths []string
@@ -242,14 +275,18 @@ func (r Resolver) canonicalIdentity(ctx context.Context, git, root string, scope
 }
 
 func (r Resolver) Radiograph(ctx context.Context, root string) (Radiography, error) {
-	if err := r.ValidateRoot(ctx, root); err != nil {
+	binding, err := r.repositoryRoot(ctx, root)
+	if err != nil {
 		return Radiography{}, err
 	}
 	git := r.GitPath
 	if git == "" {
 		git = "git"
 	}
-	repoRoot, _ := filepath.Abs(root)
+	return r.radiograph(withRootBinding(ctx, binding), git, binding.path)
+}
+
+func (r Resolver) radiograph(ctx context.Context, git, repoRoot string) (Radiography, error) {
 	raw, err := r.run(ctx, git, repoRoot, "ls-files", "-s", "-z")
 	if err != nil {
 		return Radiography{}, err
@@ -303,13 +340,109 @@ func (r Resolver) Radiograph(ctx context.Context, root string) (Radiography, err
 		}
 		report.Documentation = append(report.Documentation, DocumentationEvidence{Path: file, Digest: digest, Classification: classification, Evidence: source})
 	}
-	report.Identity = radiographyIdentity(repoRoot, report.Ownership, entries, report.Documentation, report.Exclusions)
+	report.Findings, report.Context = richFindings(repoRoot, files, entries)
+	report.Identity = radiographyIdentity(repoRoot, report.Ownership, entries, report.Documentation, report.Exclusions, report.Findings, report.Context)
 	return report, nil
 }
 
 type inventoryEntry struct {
 	mode, objectID string
 	tracked        bool
+}
+
+type radiographPathSet struct {
+	gitDir, commonDir, index, config, hooks, primaryObjects string
+	alternateObjects                                        []string
+}
+
+func (r Resolver) radiographPaths(ctx context.Context, git, root string) (radiographPathSet, error) {
+	output, err := r.run(ctx, git, root, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+	if err != nil {
+		return radiographPathSet{}, err
+	}
+	paths, ok := newlinePaths(output)
+	if !ok || len(paths) != 2 {
+		return radiographPathSet{}, domain.ErrContentRead
+	}
+	for i := range paths {
+		if paths[i], ok = cleanAbsolutePath(paths[i]); !ok {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+	}
+	result := radiographPathSet{
+		gitDir:         paths[0],
+		commonDir:      paths[1],
+		index:          filepath.Join(paths[0], "index"),
+		config:         filepath.Join(paths[1], "config"),
+		hooks:          filepath.Join(paths[1], "hooks"),
+		primaryObjects: filepath.Join(paths[1], "objects"),
+	}
+	for _, path := range []string{result.gitDir, result.commonDir, result.index, result.config, result.hooks, result.primaryObjects} {
+		if _, ok := cleanAbsolutePath(path); !ok {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+	}
+	alternates, err := os.ReadFile(filepath.Join(result.primaryObjects, "info", "alternates"))
+	if errors.Is(err, os.ErrNotExist) {
+		return result, nil
+	}
+	if err != nil {
+		return radiographPathSet{}, domain.ErrContentRead
+	}
+	paths, ok = newlinePaths(alternates)
+	if !ok {
+		return radiographPathSet{}, domain.ErrContentRead
+	}
+	for _, alternate := range paths {
+		if filepath.IsAbs(alternate) && alternate != filepath.Clean(alternate) {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+		if !filepath.IsAbs(alternate) {
+			alternate = filepath.Join(result.primaryObjects, alternate)
+		}
+		alternate, ok = cleanAbsolutePath(alternate)
+		if !ok {
+			return radiographPathSet{}, domain.ErrContentRead
+		}
+		result.alternateObjects = append(result.alternateObjects, alternate)
+	}
+	sort.Strings(result.alternateObjects)
+	return result, nil
+}
+
+func newlinePaths(raw []byte) ([]string, bool) {
+	if len(raw) == 0 {
+		return nil, true
+	}
+	if raw[len(raw)-1] != '\n' {
+		return nil, false
+	}
+	lines := bytes.Split(raw, []byte{'\n'})
+	paths := make([]string, 0, len(lines)-1)
+	for _, line := range lines[:len(lines)-1] {
+		if len(line) == 0 {
+			return nil, false
+		}
+		if line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+		if len(line) == 0 || bytes.Contains(line, []byte{'\r'}) {
+			return nil, false
+		}
+		paths = append(paths, string(line))
+	}
+	return paths, true
+}
+
+func cleanAbsolutePath(raw string) (string, bool) {
+	if !filepath.IsAbs(raw) || raw != filepath.Clean(raw) {
+		return "", false
+	}
+	physical, err := filepath.EvalSymlinks(raw)
+	if err != nil || physical != raw {
+		return "", false
+	}
+	return raw, true
 }
 
 func radiographyExclusion(file, mode string) (string, string) {
@@ -350,7 +483,133 @@ func documentationClassification(file string) (string, string) {
 	return "uncertain", "maintenance_evidence_absent"
 }
 
-func radiographyIdentity(root string, ownership OwnershipUncertainty, entries map[string]inventoryEntry, documentation []DocumentationEvidence, exclusions []Exclusion) string {
+var radiographyAreas = []string{"purpose", "stack", "modules", "architecture", "flows", "data", "execution", "tests", "deployment", "risks", "documentation"}
+var contextAreas = []string{"visible_storage", "audience", "language", "ownership"}
+
+type pathSignal struct{ area, value, signal string }
+
+func richFindings(root string, files []string, entries map[string]inventoryEntry) ([]Finding, []Finding) {
+	findings, contexts := emptyFindings(radiographyAreas), emptyFindings(contextAreas)
+	all := append(findings, contexts...)
+	for _, file := range files {
+		if !affirmativeEvidence(root, file, entries[file]) {
+			continue
+		}
+		for _, signal := range pathSignals(file) {
+			for i := range all {
+				if all[i].Area == signal.area {
+					addCandidate(&all[i], signal.value, RepositoryEvidence{Path: file, Signal: signal.signal})
+				}
+			}
+		}
+	}
+	for i := range all {
+		sort.Slice(all[i].Candidates, func(a, b int) bool { return all[i].Candidates[a].Value < all[i].Candidates[b].Value })
+		if (all[i].Area == "visible_storage" || all[i].Area == "ownership") && len(all[i].Candidates) > 1 {
+			conflict := Conflict{Reason: "multiple_unselected_candidates"}
+			for _, candidate := range all[i].Candidates {
+				conflict.Values = append(conflict.Values, candidate.Value)
+				conflict.Evidence = append(conflict.Evidence, candidate.Evidence...)
+			}
+			all[i].Conflicts = []Conflict{conflict}
+		}
+	}
+	return all[:len(findings)], all[len(findings):]
+}
+
+func emptyFindings(areas []string) []Finding {
+	result := make([]Finding, len(areas))
+	for i, area := range areas {
+		result[i] = Finding{Area: area, Absence: "insufficient_safe_path_evidence", Uncertainty: "candidates_not_confirmed"}
+	}
+	return result
+}
+
+func addCandidate(finding *Finding, value string, evidence RepositoryEvidence) {
+	finding.Absence = ""
+	for i := range finding.Candidates {
+		if finding.Candidates[i].Value == value {
+			finding.Candidates[i].Evidence = append(finding.Candidates[i].Evidence, evidence)
+			return
+		}
+	}
+	finding.Candidates = append(finding.Candidates, Candidate{Value: value, Evidence: []RepositoryEvidence{evidence}})
+}
+
+func affirmativeEvidence(root, file string, entry inventoryEntry) bool {
+	if !safeInventoryPath(file) || strings.HasPrefix(entry.mode, "120") || strings.HasPrefix(entry.mode, "1007") || strings.HasPrefix(entry.mode, "1005") {
+		return false
+	}
+	for _, component := range strings.Split(strings.ToLower(file), "/") {
+		if component == "vendor" || component == "generated" || component == "gen" {
+			return false
+		}
+	}
+	if !entry.tracked {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(file)))
+		return err == nil && info.Mode().IsRegular() && info.Mode()&0o111 == 0
+	}
+	return true
+}
+
+func pathSignals(file string) []pathSignal {
+	lower, base, parts := strings.ToLower(file), strings.ToLower(path.Base(file)), strings.Split(file, "/")
+	var signals []pathSignal
+	add := func(area, signal string) { signals = append(signals, pathSignal{area, file, signal}) }
+	if len(parts) == 1 && (base == "readme.md" || base == "readme.mdx") {
+		add("purpose", "root_readme")
+	}
+	for manifest, signal := range map[string]string{"go.mod": "go_module_manifest", "package.json": "node_package_manifest", "cargo.toml": "rust_package_manifest", "pyproject.toml": "python_project_manifest"} {
+		if lower == manifest {
+			add("stack", signal)
+		}
+	}
+	if len(parts) > 1 && (parts[0] == "cmd" || parts[0] == "internal" || parts[0] == "pkg" || parts[0] == "src" || parts[0] == "app") {
+		value := path.Join(parts[0], parts[1])
+		signals = append(signals, pathSignal{"modules", value, "package_directory"}, pathSignal{"architecture", parts[0], "architecture_directory"})
+	}
+	if (len(parts) > 2 && parts[0] == "cmd" && base == "main.go") || strings.HasPrefix(lower, "internal/app/") {
+		add("flows", "execution_flow_path")
+	}
+	if strings.Contains("/"+lower+"/", "/data/") || strings.Contains("/"+lower+"/", "/db/") || strings.Contains("/"+lower+"/", "/migrations/") || strings.HasSuffix(lower, ".sql") {
+		add("data", "data_path")
+	}
+	if (len(parts) > 2 && parts[0] == "cmd" && base == "main.go") || base == "makefile" || base == "taskfile.yml" {
+		add("execution", "execution_path")
+	}
+	if strings.HasSuffix(base, "_test.go") || strings.Contains("/"+lower+"/", "/test/") || strings.Contains("/"+lower+"/", "/tests/") {
+		add("tests", "test_path")
+	}
+	if base == "dockerfile" || strings.HasPrefix(lower, ".github/workflows/") || strings.HasPrefix(lower, "deploy/") || strings.HasPrefix(lower, "helm/") {
+		add("deployment", "deployment_path")
+	}
+	if base == "security.md" || lower == ".github/dependabot.yml" || lower == ".github/dependabot.yaml" {
+		add("risks", "risk_review_path")
+	}
+	if isDocumentationPath(file) {
+		add("documentation", "documentation_path")
+		signals = append(signals, pathSignal{"visible_storage", path.Dir(file), "documentation_storage_path"})
+	}
+	if base == "contributing.md" || base == "code_of_conduct.md" {
+		add("audience", "audience_context_path")
+	}
+	if len(parts) > 2 && strings.ToLower(parts[0]) == "docs" && languagePathSegment(parts[1]) {
+		signals = append(signals, pathSignal{"language", parts[1], "language_directory"})
+	}
+	if base == "codeowners" || base == "owners" || base == "maintainers" {
+		add("ownership", "ownership_context_path")
+	}
+	return signals
+}
+
+func languagePathSegment(value string) bool {
+	if len(value) != 2 {
+		return false
+	}
+	return value[0] >= 'a' && value[0] <= 'z' && value[1] >= 'a' && value[1] <= 'z'
+}
+
+func radiographyIdentity(root string, ownership OwnershipUncertainty, entries map[string]inventoryEntry, documentation []DocumentationEvidence, exclusions []Exclusion, groups ...[]Finding) string {
 	files := make([]string, 0, len(entries))
 	for file := range entries {
 		files = append(files, file)
@@ -373,6 +632,26 @@ func radiographyIdentity(root string, ownership OwnershipUncertainty, entries ma
 	}
 	for _, exclusion := range exclusions {
 		write("exclusion", exclusion.Path, exclusion.Reason, exclusion.Evidence)
+	}
+	for _, findings := range groups {
+		for _, finding := range findings {
+			write("finding", finding.Area, finding.Absence, finding.Uncertainty)
+			for _, candidate := range finding.Candidates {
+				write("candidate", candidate.Value)
+				for _, evidence := range candidate.Evidence {
+					write("evidence", evidence.Path, evidence.Signal)
+				}
+			}
+			for _, conflict := range finding.Conflicts {
+				write("conflict", conflict.Reason)
+				for _, value := range conflict.Values {
+					write("value", value)
+				}
+				for _, evidence := range conflict.Evidence {
+					write("evidence", evidence.Path, evidence.Signal)
+				}
+			}
+		}
 	}
 	sum := sha256.Sum256(canonical.Bytes())
 	return "sha256:" + hex.EncodeToString(sum[:])
@@ -481,24 +760,51 @@ func (r Resolver) resolveRange(ctx context.Context, git, root, raw string) (stri
 }
 
 func (r Resolver) run(parent context.Context, git, root string, args ...string) ([]byte, error) {
+	if binding, ok := parent.Value(rootBindingKey{}).(rootBinding); ok {
+		if binding.path != root {
+			return nil, domain.ErrOutsideRepository
+		}
+		if err := sameRoot(binding); err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	gitPath, err := exec.LookPath(git)
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, gitPath, append([]string{"-c", "core.attributesfile=/dev/null", "-c", "diff.external=", "-c", "diff.textconv=", "-C", root}, args...)...)
+	cmdArgs := append([]string{"-c", "core.attributesfile=/dev/null", "-c", "diff.external=", "-c", "diff.textconv=", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false", "-c", "credential.helper=", "-c", "core.hooksPath=/dev/null", "-C", root}, args...)
+	cmd := exec.CommandContext(ctx, gitPath, cmdArgs...)
 	cmd.Env = []string{
 		"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
-		"GIT_TERMINAL_PROMPT=0", "GIT_EXTERNAL_DIFF=", "GIT_DIFF_OPTS=", "LC_ALL=C", "TZ=UTC",
+		"GIT_CONFIG_COUNT=0", "GIT_OPTIONAL_LOCKS=0", "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1",
+		"GIT_TERMINAL_PROMPT=0", "GIT_ASKPASS=/bin/false", "GIT_PAGER=cat", "GIT_EXTERNAL_DIFF=", "GIT_DIFF_OPTS=", "LC_ALL=C", "TZ=UTC",
 	}
 	out := &boundedBuffer{limit: maxOutput}
 	cmd.Stdout, cmd.Stderr = out, out
 	err = cmd.Run()
+	if binding, ok := parent.Value(rootBindingKey{}).(rootBinding); ok {
+		if rootErr := sameRoot(binding); rootErr != nil {
+			return nil, rootErr
+		}
+	}
 	if errors.Is(out.err, domain.ErrOutputLimit) {
 		return nil, domain.ErrOutputLimit
 	}
 	return out.Bytes(), err
+}
+
+func withRootBinding(ctx context.Context, binding rootBinding) context.Context {
+	return context.WithValue(ctx, rootBindingKey{}, binding)
+}
+
+func sameRoot(binding rootBinding) error {
+	info, err := os.Lstat(binding.path)
+	if err != nil || !info.IsDir() || !os.SameFile(binding.info, info) {
+		return domain.ErrOutsideRepository
+	}
+	return nil
 }
 
 type boundedBuffer struct {
