@@ -166,6 +166,9 @@ func TestMCPStdioRadiographyToPlanWithoutVisibleWrites(t *testing.T) {
 	if radiographyOutput.Radiography == nil || radiographyOutput.Radiography.Identity == "" || len(radiographyOutput.Radiography.Documentation) != 1 || radiographyOutput.Radiography.Documentation[0].Path != "README.md" || radiographyOutput.Radiography.Documentation[0].Digest == "" || radiographyOutput.Radiography.Documentation[0].Classification != "uncertain" || radiographyOutput.Radiography.Documentation[0].Evidence != "maintenance_evidence_absent" {
 		t.Fatalf("radiography = %#v", radiographyOutput.Radiography)
 	}
+	if len(radiographyOutput.Radiography.Findings) != 11 || len(radiographyOutput.Radiography.Context) != 4 || radiographyOutput.Radiography.Findings[0].Area != "purpose" || radiographyOutput.Radiography.Findings[10].Area != "documentation" {
+		t.Fatalf("rich radiography = %#v", radiographyOutput.Radiography)
+	}
 
 	planResult := callMCP(t, ctx, session, "propose_plan", map[string]any{
 		"repository": repo, "visible_storage": ".", "audience": "contributors", "language": "en", "owner": "docs-team",
