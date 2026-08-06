@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +123,212 @@ func TestMCPDocumentChangeRequiresWorkspaceInitialization(t *testing.T) {
 	}
 }
 
+type radiographySlice struct {
+	Root                   string                             `json:"root"`
+	Identity               string                             `json:"identity"`
+	Section                string                             `json:"section"`
+	DocumentationCount     int                                `json:"documentation_count"`
+	ExclusionCount         int                                `json:"exclusion_count"`
+	FindingCount           int                                `json:"finding_count"`
+	ContextCount           int                                `json:"context_count"`
+	UncertainDocumentCount int                                `json:"uncertain_document_count"`
+	MissingDigestCount     int                                `json:"missing_digest_count"`
+	PageableSections       []string                           `json:"pageable_sections"`
+	Cursor                 int                                `json:"cursor"`
+	Limit                  int                                `json:"limit"`
+	Total                  int                                `json:"total"`
+	NextCursor             *int                               `json:"next_cursor"`
+	Documents              []gitadapter.DocumentationEvidence `json:"documents"`
+	Exclusions             []gitadapter.Exclusion             `json:"exclusions"`
+}
+
+func TestMCPRadiographReturnsBoundedSummaryAndIdentityBoundPages(t *testing.T) {
+	repo := mcpRepository(t)
+	writeMCP(t, filepath.Join(repo, "README.md"), "tracked\n")
+	mcpGit(t, repo, "add", "README.md")
+	mcpGit(t, repo, "commit", "-m", "fixture")
+	writeMCP(t, filepath.Join(repo, "notes.md"), "untracked\n")
+	writeMCP(t, filepath.Join(repo, ".docmanager", "owned.md"), "owned\n")
+
+	small, smallRaw, smallFailure := callRadiograph(t, map[string]any{"repository": repo})
+	if smallFailure != "" || small.Section != "summary" || small.DocumentationCount != 2 || small.ExclusionCount != 0 {
+		t.Fatalf("default summary = %#v, %q", small, smallFailure)
+	}
+	for i := 0; i < 204; i++ {
+		writeMCP(t, filepath.Join(repo, "docs", fmt.Sprintf("doc-%03d.md", i)), "untracked\n")
+	}
+	for i := 0; i < 205; i++ {
+		writeMCP(t, filepath.Join(repo, "vendor", fmt.Sprintf("excluded-%03d.md", i)), "excluded\n")
+	}
+
+	summary, summaryRaw, failure := callRadiograph(t, map[string]any{"repository": repo, "section": "summary"})
+	if failure != "" {
+		t.Fatalf("summary failure = %q", failure)
+	}
+	if summary.Root != repo || summary.Identity == "" || summary.Section != "summary" {
+		t.Fatalf("summary identity = %#v", summary)
+	}
+	if summary.DocumentationCount != 206 || summary.ExclusionCount != 205 || summary.FindingCount != 11 || summary.ContextCount != 4 || summary.UncertainDocumentCount != 206 || summary.MissingDigestCount != 205 {
+		t.Fatalf("summary counts = %#v", summary)
+	}
+	if !reflect.DeepEqual(summary.PageableSections, []string{"documents", "exclusions"}) {
+		t.Fatalf("pageable sections = %v", summary.PageableSections)
+	}
+	if len(summaryRaw) >= 1024 || len(summaryRaw)-len(smallRaw) > 32 {
+		t.Fatalf("summary size grew with inventory: small=%d large=%d", len(smallRaw), len(summaryRaw))
+	}
+	var envelope map[string]map[string]any
+	if err := json.Unmarshal(summaryRaw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	for key := range envelope["radiography"] {
+		switch strings.ToLower(key) {
+		case "documentation", "documents", "exclusions", "findings", "context":
+			t.Fatalf("summary leaked %q", key)
+		}
+	}
+
+	for _, section := range []string{"documents", "exclusions"} {
+		wantTotal := map[string]int{"documents": 206, "exclusions": 205}[section]
+		first, _, firstFailure := callRadiograph(t, map[string]any{"repository": repo, "section": section, "expected_identity": summary.Identity})
+		if firstFailure != "" {
+			t.Fatalf("first %s page failure = %q", section, firstFailure)
+		}
+		var allDocuments []gitadapter.DocumentationEvidence
+		var allExclusions []gitadapter.Exclusion
+		for cursor := 0; ; cursor += 20 {
+			page, _, pageFailure := callRadiograph(t, map[string]any{"repository": repo, "section": section, "expected_identity": summary.Identity, "cursor": cursor})
+			if pageFailure != "" || page.Identity != summary.Identity || page.Section != section || page.Cursor != cursor || page.Limit != 20 || page.Total != wantTotal {
+				t.Fatalf("%s page %d = %#v, %q", section, cursor, page, pageFailure)
+			}
+			if len(page.Documents) > 20 || len(page.Exclusions) > 20 || (section == "documents" && page.Exclusions != nil) || (section == "exclusions" && page.Documents != nil) {
+				t.Fatalf("unbounded or mixed %s page = %#v", section, page)
+			}
+			if cursor == 0 && !reflect.DeepEqual(page, first) {
+				t.Fatalf("non-deterministic first %s page: %#v != %#v", section, page, first)
+			}
+			allDocuments = append(allDocuments, page.Documents...)
+			allExclusions = append(allExclusions, page.Exclusions...)
+			if page.NextCursor == nil {
+				break
+			}
+			if *page.NextCursor != cursor+20 {
+				t.Fatalf("%s next cursor = %d", section, *page.NextCursor)
+			}
+		}
+		if section == "documents" {
+			if len(allDocuments) != 206 || allDocuments[0].Path != "README.md" || allDocuments[len(allDocuments)-1] != (gitadapter.DocumentationEvidence{Path: "notes.md", Classification: "uncertain", Evidence: "untracked_content_not_read"}) {
+				t.Fatalf("documents = %#v", allDocuments)
+			}
+		} else if len(allExclusions) != 205 {
+			t.Fatalf("exclusions = %#v", allExclusions)
+		}
+		for _, path := range append(documentPaths(allDocuments), exclusionPaths(allExclusions)...) {
+			if path == ".docmanager" || strings.HasPrefix(path, ".docmanager/") {
+				t.Fatalf("owned path paged: %q", path)
+			}
+		}
+	}
+
+	for _, test := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"missing identity", map[string]any{"repository": repo, "section": "documents"}, "invalid_radiography_page"},
+		{"negative cursor", map[string]any{"repository": repo, "section": "documents", "expected_identity": summary.Identity, "cursor": -1}, "invalid_radiography_page"},
+		{"oversized limit", map[string]any{"repository": repo, "section": "documents", "expected_identity": summary.Identity, "limit": 21}, "invalid_radiography_page"},
+		{"unsupported section", map[string]any{"repository": repo, "section": "findings", "expected_identity": summary.Identity}, "unsupported_request"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, failure := callRadiograph(t, test.args)
+			if failure != test.want {
+				t.Fatalf("failure = %q, want %q", failure, test.want)
+			}
+		})
+	}
+	writeMCP(t, filepath.Join(repo, "changed.md"), "changed\n")
+	_, _, failure = callRadiograph(t, map[string]any{"repository": repo, "section": "documents", "expected_identity": summary.Identity})
+	if failure != "stale_radiography_identity" {
+		t.Fatalf("stale identity failure = %q", failure)
+	}
+}
+
+func TestRadiographyPageRejectsInvalidBounds(t *testing.T) {
+	nonempty := gitadapter.Radiography{
+		Identity:      "sha256:test",
+		Documentation: []gitadapter.DocumentationEvidence{{Path: "a.md"}, {Path: "b.md"}},
+		Exclusions:    []gitadapter.Exclusion{{Path: "a.txt"}, {Path: "b.txt"}},
+	}
+	empty := gitadapter.Radiography{Identity: "sha256:test"}
+	for _, section := range []string{"documents", "exclusions"} {
+		for _, test := range []struct {
+			name        string
+			report      gitadapter.Radiography
+			cursor      int
+			limit       int
+			wantInvalid bool
+		}{
+			{"cursor equals total", nonempty, 2, 0, true},
+			{"cursor exceeds total", nonempty, 3, 0, true},
+			{"empty cursor zero", empty, 0, 0, false},
+			{"empty cursor positive", empty, 1, 0, true},
+			{"negative limit", nonempty, 0, -1, true},
+		} {
+			t.Run(section+"/"+test.name, func(t *testing.T) {
+				page, err := radiographyPage(test.report, radiographyInput{Section: section, ExpectedIdentity: test.report.Identity, Cursor: test.cursor, Limit: test.limit})
+				if test.wantInvalid {
+					if !errors.Is(err, errInvalidRadiographyPage) {
+						t.Fatalf("error = %v, want %v; page = %#v", err, errInvalidRadiographyPage, page)
+					}
+					return
+				}
+				if err != nil || page.Section != section || page.Cursor == nil || *page.Cursor != 0 || page.Limit == nil || *page.Limit != 20 || page.Total == nil || *page.Total != 0 || page.NextCursor != nil || len(page.Documents) != 0 || len(page.Exclusions) != 0 {
+					t.Fatalf("empty final page = %#v, %v", page, err)
+				}
+			})
+		}
+	}
+}
+
+func callRadiograph(t *testing.T, arguments map[string]any) (radiographySlice, []byte, string) {
+	t.Helper()
+	raw, _ := json.Marshal(arguments)
+	var input radiographyInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		t.Fatal(err)
+	}
+	_, output, err := radiograph(context.Background(), nil, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(output)
+	var decoded struct {
+		Radiography radiographySlice `json:"radiography"`
+		Error       string           `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	return decoded.Radiography, raw, decoded.Error
+}
+
+func documentPaths(documents []gitadapter.DocumentationEvidence) []string {
+	paths := make([]string, len(documents))
+	for i, document := range documents {
+		paths[i] = document.Path
+	}
+	return paths
+}
+
+func exclusionPaths(exclusions []gitadapter.Exclusion) []string {
+	paths := make([]string, len(exclusions))
+	for i, exclusion := range exclusions {
+		paths[i] = exclusion.Path
+	}
+	return paths
+}
+
 func TestMCPInstalledWorkspaceCanImportCatalogWithoutIgnoringOwnedState(t *testing.T) {
 	repo := mcpRepository(t)
 	writeMCP(t, filepath.Join(repo, "README.md"), "before\n")
@@ -187,8 +395,9 @@ func TestMCPInstalledWorkspaceCanImportCatalogWithoutIgnoringOwnedState(t *testi
 		{Path: "README.md", Digest: planned.Planning.Radiography.Documentation[0].Digest, Classification: "uncertain", Evidence: "maintenance_evidence_absent"},
 		{Path: "notes.md", Classification: "uncertain", Evidence: "untracked_content_not_read"},
 	}
-	if !reflect.DeepEqual(ordinary.Radiography.Documentation, want) {
-		t.Fatalf("ordinary documentation = %#v, want %#v", ordinary.Radiography.Documentation, want)
+	_, page, err := radiograph(context.Background(), nil, radiographyInput{Repository: repo, Section: "documents", ExpectedIdentity: ordinary.Radiography.Identity})
+	if err != nil || page.Radiography == nil || !reflect.DeepEqual(page.Radiography.Documents, want) {
+		t.Fatalf("ordinary documentation = %#v, want %#v, %v", page.Radiography, want, err)
 	}
 	assertMCPRows(t, repo, map[string]int{"catalog_entries": 1, "catalog_imports": 1})
 }
@@ -239,11 +448,14 @@ func TestMCPStdioRadiographyToPlanWithoutVisibleWrites(t *testing.T) {
 	if err := json.Unmarshal(raw, &radiographyOutput); err != nil {
 		t.Fatalf("decode radiography output: %v", err)
 	}
-	if radiographyOutput.Radiography == nil || radiographyOutput.Radiography.Identity == "" || len(radiographyOutput.Radiography.Documentation) != 1 || radiographyOutput.Radiography.Documentation[0].Path != "README.md" || radiographyOutput.Radiography.Documentation[0].Digest == "" || radiographyOutput.Radiography.Documentation[0].Classification != "uncertain" || radiographyOutput.Radiography.Documentation[0].Evidence != "maintenance_evidence_absent" {
+	if radiographyOutput.Radiography == nil || radiographyOutput.Radiography.Identity == "" || radiographyOutput.Radiography.DocumentationCount == nil || radiographyOutput.Radiography.FindingCount == nil || radiographyOutput.Radiography.ContextCount == nil || *radiographyOutput.Radiography.DocumentationCount != 1 || *radiographyOutput.Radiography.FindingCount != 11 || *radiographyOutput.Radiography.ContextCount != 4 {
 		t.Fatalf("radiography = %#v", radiographyOutput.Radiography)
 	}
-	if len(radiographyOutput.Radiography.Findings) != 11 || len(radiographyOutput.Radiography.Context) != 4 || radiographyOutput.Radiography.Findings[0].Area != "purpose" || radiographyOutput.Radiography.Findings[10].Area != "documentation" {
-		t.Fatalf("rich radiography = %#v", radiographyOutput.Radiography)
+	pageResult := callMCP(t, ctx, session, "radiograph", map[string]any{"repository": repo, "section": "documents", "expected_identity": radiographyOutput.Radiography.Identity})
+	pageRaw, _ := json.Marshal(pageResult.StructuredContent)
+	var pageOutput toolOutput
+	if err := json.Unmarshal(pageRaw, &pageOutput); err != nil || pageOutput.Radiography == nil || len(pageOutput.Radiography.Documents) != 1 || pageOutput.Radiography.Documents[0].Path != "README.md" || pageOutput.Radiography.Documents[0].Digest == "" || pageOutput.Radiography.Documents[0].Evidence != "maintenance_evidence_absent" {
+		t.Fatalf("radiography page = %#v, %v", pageOutput.Radiography, err)
 	}
 
 	planResult := callMCP(t, ctx, session, "propose_plan", map[string]any{
