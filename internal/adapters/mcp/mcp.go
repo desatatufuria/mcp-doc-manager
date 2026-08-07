@@ -27,7 +27,37 @@ type receiptInput struct {
 }
 
 type radiographyInput struct {
-	Repository string `json:"repository" jsonschema:"absolute repository root"`
+	Repository       string `json:"repository" jsonschema:"absolute repository root"`
+	Section          string `json:"section,omitempty" jsonschema:"summary (default), documents, or exclusions"`
+	ExpectedIdentity string `json:"expected_identity,omitempty" jsonschema:"required exact summary identity for pages"`
+	Cursor           int    `json:"cursor,omitempty" jsonschema:"zero-based page cursor"`
+	Limit            int    `json:"limit,omitempty" jsonschema:"page size up to 20; defaults to 20"`
+}
+
+const maxRadiographyPage = 20
+
+var (
+	errInvalidRadiographyPage = errors.New("invalid_radiography_page")
+	errStaleRadiography       = errors.New("stale_radiography_identity")
+)
+
+type radiographyOutput struct {
+	Root                   string                             `json:"root,omitempty"`
+	Identity               string                             `json:"identity"`
+	Section                string                             `json:"section"`
+	DocumentationCount     *int                               `json:"documentation_count,omitempty"`
+	ExclusionCount         *int                               `json:"exclusion_count,omitempty"`
+	FindingCount           *int                               `json:"finding_count,omitempty"`
+	ContextCount           *int                               `json:"context_count,omitempty"`
+	UncertainDocumentCount *int                               `json:"uncertain_document_count,omitempty"`
+	MissingDigestCount     *int                               `json:"missing_digest_count,omitempty"`
+	PageableSections       []string                           `json:"pageable_sections,omitempty"`
+	Cursor                 *int                               `json:"cursor,omitempty"`
+	Limit                  *int                               `json:"limit,omitempty"`
+	Total                  *int                               `json:"total,omitempty"`
+	NextCursor             *int                               `json:"next_cursor,omitempty"`
+	Documents              []gitadapter.DocumentationEvidence `json:"documents,omitempty"`
+	Exclusions             []gitadapter.Exclusion             `json:"exclusions,omitempty"`
 }
 
 type planningInput struct {
@@ -96,7 +126,7 @@ type catalogAuditInput struct {
 
 type toolOutput struct {
 	Report       *domain.Report                 `json:"report,omitempty"`
-	Radiography  *gitadapter.Radiography        `json:"radiography,omitempty"`
+	Radiography  *radiographyOutput             `json:"radiography,omitempty"`
 	Planning     *app.PlanningResult            `json:"planning,omitempty"`
 	Import       *app.CatalogImportResult       `json:"import,omitempty"`
 	Audit        *app.CatalogAuditResult        `json:"audit,omitempty"`
@@ -113,7 +143,7 @@ func NewServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "repository-documentation-manager", Version: "1.0.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "document_change", Description: "Analyze one explicit Git scope without changing documentation."}, documentChange)
 	mcp.AddTool(server, &mcp.Tool{Name: "verify_receipt", Description: "Verify one content-bound analysis receipt."}, verifyReceipt)
-	mcp.AddTool(server, &mcp.Tool{Name: "radiograph", Description: "Read repository documentation evidence without changing files."}, radiograph)
+	mcp.AddTool(server, &mcp.Tool{Name: "radiograph", Description: "Read a bounded repository radiography summary or an identity-bound documents/exclusions page without changing files."}, radiograph)
 	mcp.AddTool(server, &mcp.Tool{Name: "propose_plan", Description: "Propose a bounded documentation plan without authoring or persistence."}, proposePlan)
 	mcp.AddTool(server, &mcp.Tool{Name: "import_catalog", Description: "Validate and atomically persist an approved catalog plan."}, importCatalog)
 	mcp.AddTool(server, &mcp.Tool{Name: "audit_catalog", Description: "Audit the durable catalog from an explicit Git scope or current radiography."}, auditCatalog)
@@ -163,7 +193,73 @@ func radiograph(ctx context.Context, _ *mcp.CallToolRequest, input radiographyIn
 	if err != nil {
 		return failure(err)
 	}
-	return nil, toolOutput{Radiography: &report}, nil
+	if input.Section == "" || input.Section == "summary" {
+		summary := radiographySummary(report)
+		return nil, toolOutput{Radiography: &summary}, nil
+	}
+	page, err := radiographyPage(report, input)
+	if err != nil {
+		return failure(err)
+	}
+	return nil, toolOutput{Radiography: &page}, nil
+}
+
+func radiographySummary(report gitadapter.Radiography) radiographyOutput {
+	documentationCount, exclusionCount := len(report.Documentation), len(report.Exclusions)
+	findingCount, contextCount := len(report.Findings), len(report.Context)
+	uncertainCount, missingDigestCount := 0, 0
+	summary := radiographyOutput{
+		Root: report.Root, Identity: report.Identity, Section: "summary",
+		DocumentationCount: &documentationCount, ExclusionCount: &exclusionCount,
+		FindingCount: &findingCount, ContextCount: &contextCount,
+		UncertainDocumentCount: &uncertainCount, MissingDigestCount: &missingDigestCount,
+		PageableSections: []string{"documents", "exclusions"},
+	}
+	for _, document := range report.Documentation {
+		if document.Classification == "uncertain" {
+			uncertainCount++
+		}
+		if document.Digest == "" {
+			missingDigestCount++
+		}
+	}
+	return summary
+}
+
+func radiographyPage(report gitadapter.Radiography, input radiographyInput) (radiographyOutput, error) {
+	if input.Section != "documents" && input.Section != "exclusions" {
+		return radiographyOutput{}, domain.ErrUnsupportedRequest
+	}
+	if input.ExpectedIdentity == "" || input.Cursor < 0 || input.Limit < 0 || input.Limit > maxRadiographyPage {
+		return radiographyOutput{}, errInvalidRadiographyPage
+	}
+	if input.ExpectedIdentity != report.Identity {
+		return radiographyOutput{}, errStaleRadiography
+	}
+	limit := input.Limit
+	if limit == 0 {
+		limit = maxRadiographyPage
+	}
+	total := len(report.Documentation)
+	if input.Section == "exclusions" {
+		total = len(report.Exclusions)
+	}
+	if input.Cursor > total || (total > 0 && input.Cursor == total) {
+		return radiographyOutput{}, errInvalidRadiographyPage
+	}
+	start := input.Cursor
+	end := min(start+limit, total)
+	cursor := input.Cursor
+	page := radiographyOutput{Identity: report.Identity, Section: input.Section, Cursor: &cursor, Limit: &limit, Total: &total}
+	if end < total {
+		page.NextCursor = &end
+	}
+	if input.Section == "documents" {
+		page.Documents = report.Documentation[start:end]
+	} else {
+		page.Exclusions = report.Exclusions[start:end]
+	}
+	return page, nil
 }
 
 func proposePlan(ctx context.Context, _ *mcp.CallToolRequest, input planningInput) (*mcp.CallToolResult, toolOutput, error) {
@@ -332,7 +428,7 @@ func failure(err error) (*mcp.CallToolResult, toolOutput, error) {
 }
 
 func classify(err error) string {
-	for _, typed := range []error{app.ErrPlanningDenied, app.ErrCatalogEvidenceRequired, domain.ErrIdempotencyConflict, domain.ErrLegacyIdempotencyReplayUnavailable, domain.ErrInvalidScope, domain.ErrNotRepository, domain.ErrOutsideRepository, domain.ErrGitUnavailable, domain.ErrUnsupportedRequest, domain.ErrLedgerFailure, domain.ErrReceiptMismatch, domain.ErrInvalidTarget} {
+	for _, typed := range []error{errInvalidRadiographyPage, errStaleRadiography, app.ErrPlanningDenied, app.ErrCatalogEvidenceRequired, domain.ErrIdempotencyConflict, domain.ErrLegacyIdempotencyReplayUnavailable, domain.ErrInvalidScope, domain.ErrNotRepository, domain.ErrOutsideRepository, domain.ErrGitUnavailable, domain.ErrUnsupportedRequest, domain.ErrLedgerFailure, domain.ErrReceiptMismatch, domain.ErrInvalidTarget} {
 		if errors.Is(err, typed) {
 			return typed.Error()
 		}
